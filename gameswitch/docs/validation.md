@@ -34,6 +34,8 @@ Der Eigentümer meldete Portalhänger vor allem beim ersten Besuch neuer Gebiete
 
 Die zweiminütige Nachmessung zeigte etwa 11,3/12 GiB Container-RAM, rund 0,7 GiB verbleibende Reserve, keine neuen RAM-Limit-/OOM-Ereignisse und keine CPU-Drosselung. Zwei weitere Lagwarnungen bestätigten, dass die Hänger dadurch nicht vollständig beseitigt wurden. Anschließend wurde im Panel ein regulärer Wechsel zu Garry's Mod angefordert; Minecraft endete geordnet mit Exitcode 0. Das Feature-Deployment wurde während der laufenden Installation durch seine Vorprüfung zurückgehalten, um den Vorgang nicht zu unterbrechen.
 
+Nach erfolgreichem Abschluss des Wechsels wurden Backend und Oberfläche mit Restart-Funktion ausgerollt. Nur GameSwitch wurde neu gestartet; Container-ID, Startzeit und Neustartzähler der inzwischen laufenden Garry's-Mod-Instanz blieben identisch. Alle drei Verwaltungsdienste sind aktiv, die öffentliche Panel-Startseite liefert HTTPS 200, Einrichtung bleibt abgeschlossen und die gespeicherte Evolution-Konfiguration bestätigt View 16 / Simulation 6. Die Minecraft-JVM wurde durch diese Arbeit nicht neu gestartet; die vorbereitete Heap-Anpassung greift beim nächsten regulären Start.
+
 ## Noch offen für den jeweiligen Spielbetrieb
 
 - Echte Docker-Starts anderer Minecraft-Varianten sowie GMod und Collection-Downloads.
