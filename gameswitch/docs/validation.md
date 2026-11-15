@@ -14,6 +14,8 @@ Zunächst wurden die Go-Tests unter Windows crosskompiliert und in WSL ausgefüh
 
 Lokale isolierte Sandbox im Browser: Anmeldung, GMod-Profilanlage mit offizieller Collection-URL, Start, zweites Profil, Wechsel mit abgeschlossenem Backup, Backup-Liste und Wiederherstellung einschließlich zusätzlicher Sicherheitskopie. Minecraft-Versionsliste lädt vom echten Mojang-Katalog; Modrinth-Suche und Versionsauswahl wurden im Browser geprüft. Die echte FTB-Suche liefert FTB Evolution 2; Auswahl löst Version 1.9.0, Minecraft 26.1.2 und Java 25 auf. TTT-Profil mit Collection und explizitem Kartennamen wurde über die Oberfläche angelegt. Keine echten Welten oder VPS-Spielprozesse wurden hierfür verwendet. Schmale Ansicht und Desktop-Breakpoint wurden kontrolliert; keine Browserfehler im geprüften Ablauf.
 
+Die neue Minecraft-Konsolensteuerung wurde mit einem separaten simulierten Profil im Browser geprüft: `list` per Enter sowie die OP-Hilfe mit einem Testnamen wurden jeweils einmal angenommen, als Simulation ausgegeben und das Eingabefeld anschließend geleert. Es wurden dabei keine echten Spielrechte vergeben. Die Produktionsanmeldung lädt weiterhin; der geschützte Produktionsdialog wurde ohne Eigentümerpasswort nicht geöffnet.
+
 ## Tatsächliches Deployment
 
 GameSwitch, die gepatchte native PufferPanel-Binary und Caddy 2.11.9 laufen als getrennte systemd-Dienste auf Debian 13 und starten automatisch. Ein öffentlich vertrauenswürdiges IP-Zertifikat wurde ausgestellt; Caddy übernimmt die Erneuerung. Verwaltungsdienste 3001/8080/5657 sind ausschließlich an Loopback gebunden. SSH-Passwortanmeldungen wurden nach erfolgreichem Schlüsseltest deaktiviert.
