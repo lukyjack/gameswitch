@@ -25,6 +25,7 @@ export class Controller {
     if (this.busy) { const error = new Error('Eine Serveraktion läuft bereits.'); error.status = 409; throw error; }
     const profile = this.profile(profileId);
     const labels = type === 'activate' ? ['Laufzeit prüfen', 'Spielstand speichern', 'Alte Instanz stoppen', 'Sicherung abschließen', 'Ziel installieren', 'Ziel starten']
+      : type === 'restart' ? ['Laufzeit prüfen', 'Spielstand speichern', 'Instanz stoppen', 'Stopp bestätigen', 'Sicherung abschließen', 'Instanz starten']
       : type === 'restore' ? ['Laufzeit prüfen', 'Sicherheitskopie erstellen', 'Sicherung wiederherstellen']
       : type === 'backup' ? ['Laufzeit prüfen', 'Sicherung abschließen'] : ['Laufzeit prüfen', 'Spielstand speichern', 'Instanz stoppen'];
     const job = { id: randomUUID(), type, status: 'running', profileId, createdAt: new Date().toISOString(), steps: labels.map(label => ({ label, status: 'pending' })) };
@@ -70,6 +71,31 @@ export class Controller {
           if (await this.reconcile()) throw new Error('Eine Instanz wurde außerhalb von GameSwitch gestartet.');
           await this.runtime.start(profile); profile.status = 'running'; this.store.state.activeProfileId = profile.id;
         });
+      } else if (job.type === 'restart') {
+        if (!profile.installed) throw new Error('Profil wurde noch nicht installiert.');
+        if (this.store.state.recoveryRequiredProfileIds.includes(profile.id)) throw new Error('Unvollständige Wiederherstellung: Dieses Profil muss zuerst erfolgreich aus einer Sicherung wiederhergestellt werden.');
+        if (current?.id !== profile.id) throw new Error('Nur das aktuell laufende Profil kann neu gestartet werden.');
+        if (this.store.state.pendingSafetyBackupProfileId && this.store.state.pendingSafetyBackupProfileId !== profile.id) throw new Error('Ausstehende Sicherung zuerst für das vorherige Profil abschließen.');
+        // Record the safety obligation before save/stop. A crash or failed backup
+        // must not let a later activate request silently skip this snapshot.
+        this.store.state.pendingSafetyBackupProfileId = profile.id;
+        await this.store.save();
+        await this.step(job, 1, () => this.runtime.save(profile));
+        await this.step(job, 2, () => this.runtime.stop(profile));
+        await this.step(job, 3, async () => {
+          const status = await this.runtime.status(profile);
+          if (status.running !== false) throw new Error('Stopp wurde nicht bestätigt. Neustart bleibt angehalten.');
+          profile.status = 'stopped';
+          this.store.state.activeProfileId = null;
+        });
+        await this.step(job, 4, () => this.backup(profile, 'Vor-Neustart'));
+        await this.step(job, 5, async () => {
+          if (await this.reconcile()) throw new Error('Eine Instanz wurde außerhalb von GameSwitch gestartet.');
+          if (this.store.state.pendingSafetyBackupProfileId) throw new Error('Ausstehende Sicherung verhindert den Neustart.');
+          await this.runtime.start(profile);
+          profile.status = 'running';
+          this.store.state.activeProfileId = profile.id;
+        });
       } else if (job.type === 'stop') {
         if (current?.id !== profile.id) throw new Error('Dieses Profil läuft nicht.');
         this.store.state.pendingSafetyBackupProfileId = profile.id; await this.store.save();
@@ -91,7 +117,7 @@ export class Controller {
           });
         }
       }
-      job.status = 'completed'; this.store.event(`${job.type === 'activate' ? 'Profilwechsel' : job.type === 'stop' ? 'Serverstopp' : job.type === 'restore' ? 'Wiederherstellung' : 'Sicherung'} für „${profile.name}“ abgeschlossen.`);
+      job.status = 'completed'; this.store.event(`${job.type === 'activate' ? 'Profilwechsel' : job.type === 'restart' ? 'Serverneustart' : job.type === 'stop' ? 'Serverstopp' : job.type === 'restore' ? 'Wiederherstellung' : 'Sicherung'} für „${profile.name}“ abgeschlossen.`);
     } catch (error) {
       job.status = 'failed'; job.error = error.message || 'Aktion fehlgeschlagen.';
       this.store.event(job.error, 'error');

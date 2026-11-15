@@ -133,7 +133,7 @@ export async function createApp(options = {}) {
     store.state.profiles.push(profile); store.event(`Profil „${profile.name}“ angelegt.`); await store.save();
     res.status(201).json({ profile });
   }));
-  for (const action of ['activate', 'stop', 'backup']) app.post(`/api/profiles/:id/${action}`, (req, res, next) => { try { res.status(202).json({ job: controller.begin(action, req.params.id) }); } catch (error) { next(error); } });
+  for (const action of ['activate', 'restart', 'stop', 'backup']) app.post(`/api/profiles/:id/${action}`, (req, res, next) => { try { if (action === 'restart') z.object({}).strict().parse(req.body ?? {}); res.status(202).json({ job: controller.begin(action, req.params.id) }); } catch (error) { next(error); } });
   app.post('/api/backups/:id/restore', (req, res, next) => {
     const backup = store.state.backups.find(item => item.id === req.params.id);
     if (!backup) return res.status(404).json({ error: 'Sicherung nicht gefunden.' });

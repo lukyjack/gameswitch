@@ -31,6 +31,7 @@ Der gebaute Server läuft standardmäßig unter `http://127.0.0.1:3001`. Konfigu
 - Ein aktives von GameSwitch verwaltetes Profil. Wechsel: laufende Instanz geordnet beenden → vollständiges Backup bestätigen → Ziel installieren/starten. Getrennte Serververzeichnisse bewahren die ursprünglichen Welten und Konfigurationen. Zusätzliche manuell gestartete Server außerhalb der verwalteten Profile liegen außerhalb dieser Steuerung.
 - Backup-Liste, Wiederherstellung im gestoppten Zustand mit vorheriger Sicherung, Konsole, Vorgangsfortschritt und Ereignisse.
 - Minecraft-Konsole mit Befehleingabe und OP-Hilfe für einen Spielernamen. Befehle benötigen eine angemeldete Administratorsitzung und werden ohne Shell an die laufende Instanz gesendet.
+- Neustart des aktiven Profils mit ausdrücklicher Bestätigung: Welt speichern, geordnet stoppen, vollständiges Backup abschließen und dasselbe Profil ohne Neuinstallation starten.
 - Persistente Profile und Jobs; widersprüchliche oder unterbrochene Abläufe brechen kontrolliert ab.
 - Ressourcenbudget passend für 8 vCPU / 16 GB RAM, mit Reserve für Betriebssystem und Panel. Große Modpacks müssen anhand ihrer eigenen Anforderungen dimensioniert werden.
 

@@ -162,6 +162,7 @@ function App() {
   const [query, setQuery] = useState("");
   const [consoleProfile, setConsoleProfile] = useState(null);
   const [consoleLines, setConsoleLines] = useState([]);
+  const mutationInFlight = useRef(false);
   const refresh = async () => {
     try {
       setState(await api("/state"));
@@ -200,6 +201,8 @@ function App() {
   const runningJob = state?.job?.status === "running";
   const sandbox = (state?.mode || session?.mode) === "sandbox";
   const mutate = async (path, success) => {
+    if (mutationInFlight.current || runningJob) return;
+    mutationInFlight.current = true;
     setBusy(true);
     setError("");
     try {
@@ -208,10 +211,21 @@ function App() {
       if (success) setNotice(success);
       await refresh();
     } catch (e) {
-      setError(e.message);
+      if (e.status === 401) {
+        csrfToken = "";
+        setModal(null);
+        setConsoleProfile(null);
+        setSession({ authenticated: false });
+      } else setError(e.message);
     } finally {
+      mutationInFlight.current = false;
       setBusy(false);
     }
+  };
+  const requestRestart = (profile) => {
+    if (busy || runningJob || profile.status !== "running") return;
+    setError("");
+    setModal({ type: "restart", profile });
   };
   const showConsole = async (profile) => {
     setConsoleProfile(profile);
@@ -538,6 +552,18 @@ function App() {
                                 Konsole
                               </button>
                               <button
+                                className="button subtle"
+                                disabled={
+                                  busy ||
+                                  runningJob ||
+                                  active.status !== "running"
+                                }
+                                onClick={() => requestRestart(active)}
+                              >
+                                <RefreshCw size={15} />
+                                Neu starten
+                              </button>
+                              <button
                                 className="button danger-outline"
                                 disabled={busy || runningJob}
                                 onClick={() =>
@@ -662,6 +688,7 @@ function App() {
                               setModal({ type: "activate", profile })
                             }
                             onConsole={() => showConsole(profile)}
+                            onRestart={() => requestRestart(profile)}
                             onBackup={() =>
                               setModal({ type: "backup", profile })
                             }
@@ -818,6 +845,7 @@ function App() {
           active={active}
           sandbox={sandbox}
           busy={busy}
+          runningJob={runningJob}
           error={error}
           onClose={() => setModal(null)}
           onConfirm={() =>
@@ -1254,6 +1282,7 @@ function ProfileCard({
   disabled,
   onActivate,
   onConsole,
+  onRestart,
   onBackup,
 }) {
   const minecraft = isMinecraft(profile);
@@ -1305,7 +1334,9 @@ function ProfileCard({
             <Server size={14} />:{profile.port}
           </span>
         </div>
-        <div className="profile-actions">
+        <div
+          className={`profile-actions ${active ? "profile-actions-running" : ""}`}
+        >
           <button
             className={`button ${active ? "subtle" : "primary-soft"}`}
             disabled={disabled || profile.status === "unknown"}
@@ -1328,6 +1359,17 @@ function ProfileCard({
           >
             <Database size={17} />
           </button>
+          {active && (
+            <button
+              className="button subtle profile-restart"
+              disabled={disabled || profile.status !== "running"}
+              onClick={onRestart}
+              aria-label={`${profile.name} neu starten`}
+            >
+              <RefreshCw size={15} />
+              Neu starten
+            </button>
+          )}
         </div>
       </div>
     </article>
@@ -1356,17 +1398,23 @@ function JobProgress({ job, profiles }) {
         <div>
           <h3>
             {job.status === "running"
-              ? "Dein Server macht sich bereit."
+              ? job.type === "restart"
+                ? "Neustart läuft."
+                : "Dein Server macht sich bereit."
               : job.status === "failed"
                 ? "Vorgang sicher angehalten."
-                : "Alles bereit."}
+                : job.type === "restart"
+                  ? "Serverprozess neu gestartet."
+                  : "Alles bereit."}
           </h3>
           <p>
             {profile?.name || "Servervorgang"}
             {job.status === "failed"
               ? ` · ${job.error || "Bitte das Protokoll prüfen."}`
               : job.status === "completed"
-                ? " · Vorgang abgeschlossen"
+                ? job.type === "restart"
+                  ? " · Die Welt kann noch laden; die Konsole zeigt den Fortschritt."
+                  : " · Vorgang abgeschlossen"
                 : " · Du kannst den Fortschritt hier verfolgen."}
           </p>
         </div>
@@ -1709,26 +1757,34 @@ function ConfirmModal({
   active,
   sandbox,
   busy,
+  runningJob,
   error,
   onClose,
   onConfirm,
 }) {
   const type = modal.type;
   const restore = type === "restore";
+  const restart = type === "restart";
   const target = restore
     ? profiles.find((p) => p.id === modal.backup.profileId)
     : modal.profile;
   const switchProfile =
     type === "activate" && active && active.id !== target?.id;
+  const restartUnavailable =
+    restart &&
+    profiles.find((profile) => profile.id === target?.id)?.status !== "running";
+  const confirmDisabled = busy || runningJob || restartUnavailable;
   const title = restore
     ? "Spielstand wiederherstellen?"
-    : type === "stop"
-      ? "Session beenden?"
-      : type === "backup"
-        ? "Spielstand sichern?"
-        : switchProfile
-          ? "Bereit für den Spielewechsel?"
-          : "Deine Session starten?";
+    : restart
+      ? "Server neu starten?"
+      : type === "stop"
+        ? "Session beenden?"
+        : type === "backup"
+          ? "Spielstand sichern?"
+          : switchProfile
+            ? "Bereit für den Spielewechsel?"
+            : "Deine Session starten?";
   return (
     <Modal
       title={title}
@@ -1742,8 +1798,12 @@ function ConfirmModal({
             <span>{error}</span>
           </div>
         )}
-        <div className={`confirm-symbol ${type === "stop" ? "amber" : ""}`}>
+        <div
+          className={`confirm-symbol ${type === "stop" || restart ? "amber" : ""}`}
+        >
           {restore ? (
+            <RefreshCw size={29} />
+          ) : restart ? (
             <RefreshCw size={29} />
           ) : type === "backup" ? (
             <Database size={29} />
@@ -1764,6 +1824,41 @@ function ConfirmModal({
               <ShieldCheck size={18} />
               Vorher wird der aktuelle Stand als Sicherheitsbackup gesichert.
             </div>
+          </>
+        ) : restart ? (
+          <>
+            <p>
+              <strong>{target?.name}</strong> wird kontrolliert neu gestartet.
+              Alle verbundenen Spieler werden dabei getrennt.
+            </p>
+            <div className="switch-flow">
+              {[
+                "Speichern & sauber stoppen",
+                "Backup abschließen",
+                "Dasselbe Profil starten",
+              ].map((label, index) => (
+                <div key={label}>
+                  <span>{index + 1}</span>
+                  <strong>{label}</strong>
+                  {index < 2 && <ChevronRight size={15} />}
+                </div>
+              ))}
+            </div>
+            <div className="inline-note">
+              <ShieldCheck size={18} />
+              Der Spielstand wird gesichert. Erst nach abgeschlossenem Backup
+              startet dasselbe Profil mit seiner bisherigen Packversion.
+            </div>
+            <p className="restart-duration-note">
+              Große Modpacks können beim erneuten Laden mehrere Minuten
+              brauchen. Den Fortschritt siehst du in der Konsole.
+            </p>
+            {restartUnavailable && (
+              <p className="inline-note" role="status">
+                Das Profil läuft gerade nicht. Aktualisiere den Status, bevor du
+                einen Neustart anforderst.
+              </p>
+            )}
           </>
         ) : type === "stop" ? (
           <p>
@@ -1830,23 +1925,31 @@ function ConfirmModal({
         <button className="button subtle" disabled={busy} onClick={onClose}>
           Abbrechen
         </button>
-        <button className="button primary" disabled={busy} onClick={onConfirm}>
+        <button
+          className="button primary"
+          disabled={confirmDisabled}
+          onClick={onConfirm}
+        >
           {busy ? (
             <LoaderCircle className="spin" size={16} />
           ) : type === "stop" ? (
             <Square size={14} />
+          ) : restart ? (
+            <RefreshCw size={16} />
           ) : (
             <ArrowRight size={16} />
           )}
           {restore
             ? "Wiederherstellen"
-            : type === "stop"
-              ? "Session beenden"
-              : type === "backup"
-                ? "Backup erstellen"
-                : switchProfile
-                  ? "Sicher wechseln"
-                  : "Profil starten"}
+            : restart
+              ? "Neustart bestätigen"
+              : type === "stop"
+                ? "Session beenden"
+                : type === "backup"
+                  ? "Backup erstellen"
+                  : switchProfile
+                    ? "Sicher wechseln"
+                    : "Profil starten"}
         </button>
       </div>
     </Modal>

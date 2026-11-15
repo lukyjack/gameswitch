@@ -1107,6 +1107,20 @@ main {
   gap: 8px;
   margin-top: 17px;
 }
+.profile-actions.profile-actions-running {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 36px;
+}
+.profile-actions .profile-restart {
+  grid-column: 1 / -1;
+  width: 100%;
+}
+.restart-duration-note {
+  margin-top: 15px;
+  color: #8d9fb2;
+  font-size: 11px;
+  line-height: 1.8;
+}
 .profile-actions .button {
   flex: 1;
   justify-content: center;
