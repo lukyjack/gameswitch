@@ -2,7 +2,7 @@
 
 Eine deutschsprachige Gameserver-Oberfläche für einen einzelnen VPS: Spiele und Minecraft-Modpacks als getrennte Profile verwalten und zwischen ihnen wechseln, ohne den bisherigen Spielstand zu überschreiben.
 
-**Entwicklungsstand:** lokaler MVP mit Sandbox und PufferPanel-Adapter. Noch kein VPS-Deployment. Echte Spieleinstallation und Container-Isolation müssen auf einem Linux-Testhost abgenommen werden; ein erfolgreicher Sandbox-Test ersetzt diesen Schritt nicht.
+**Entwicklungsstand:** MVP mit Sandbox und PufferPanel-Adapter; auf Debian 13 mit Docker und HTTPS eingerichtet. Start/Stopp, Containerrechte und Backup/Wiederherstellung wurden gegen die echte Laufzeit geprüft. Die vollständige Installation einzelner Minecraft-Modpacks und GMod-Collections wird beim jeweiligen ersten Spielstart geprüft.
 
 ## Lokal starten
 
@@ -37,7 +37,7 @@ Weitere Spiele werden als geprüfte serverseitige Definitionen hinzugefügt. Bel
 
 ## Sicherheit und späteres Hosting
 
-GameSwitch bindet standardmäßig nur an Loopback. Anmeldung, scrypt-Passworthashes, begrenzte Loginversuche, HttpOnly-/SameSite-Cookies, CSRF-/Origin-Prüfung, Sicherheitsheader und validierte Eingaben gehören zur Anwendung. Zugangsdaten der Laufzeit bleiben auf dem Server. GameSwitch selbst benötigt keinen Docker-Socket.
+GameSwitch bindet standardmäßig nur an Loopback; im VPS-Betrieb steht ein HTTPS-Reverse-Proxy davor. Anmeldung, scrypt-Passworthashes, begrenzte Loginversuche, HttpOnly-/SameSite-/Secure-Cookies, CSRF-/Origin-Prüfung, Sicherheitsheader und validierte Eingaben gehören zur Anwendung. Zugangsdaten der Laufzeit bleiben auf dem Server. GameSwitch selbst benötigt keinen Docker-Socket. GitHub Actions ist für dieses Repository deaktiviert; Prüfungen laufen lokal oder auf dem VPS.
 
 Die echte Laufzeit verwendet **diesen gepatchten PufferPanel-Fork**. Die Backup-Erweiterung meldet tatsächlichen Abschluss beziehungsweise Fehler; ein unverändertes PufferPanel wird dafür abgelehnt. Das ist eine Voraussetzung für den sicheren Wechselablauf.
 

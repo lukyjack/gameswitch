@@ -1,10 +1,9 @@
 name: GameSwitch checks
 
+# GitHub Actions are disabled for this repository at the owner's request.
+# Checks run locally/on the VPS; no automatic push/PR jobs consume quota.
 on:
-  push:
-    paths: ['gameswitch/**', '.github/workflows/gameswitch.yml']
-  pull_request:
-    paths: ['gameswitch/**', '.github/workflows/gameswitch.yml']
+  workflow_dispatch:
 
 permissions:
   contents: read

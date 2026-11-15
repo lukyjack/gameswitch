@@ -1,6 +1,6 @@
 # Hosting-Vorbereitung für den Netcup-VPS
 
-Diese Anleitung bereitet den späteren Betrieb vor. Die konkrete Zieladresse bleibt in der lokalen SSH-Konfiguration. Das Panel wird erst im späteren Hosting-Schritt installiert. Für die separat angefragte SSH-Verbindung wird ein eigener lokaler Schlüssel verwendet; private Schlüssel und Root-Passwörter gehören niemals ins Repository.
+Diese Anleitung beschreibt den Betrieb auf einem einzelnen VPS. Die konkrete Zieladresse bleibt in der lokalen SSH-Konfiguration. Private Schlüssel und Root-Passwörter gehören niemals ins Repository. GitHub Actions ist auf Wunsch des Eigentümers deaktiviert; Builds und Tests laufen lokal oder direkt auf dem VPS.
 
 ## Aufbau
 
@@ -23,6 +23,8 @@ npm prune --omit=dev
 Node.js 24 oder neuer verwenden. Quellcode und `dist` gehören einem administrativen Benutzer; der Dienst darf nur sein Datenverzeichnis schreiben. Im Deployment nur benötigten Anwendungscode bereitstellen, keine `.git`-Historie oder privaten SSH-Schlüssel. Der Dienst erhält keinen Docker-Socket.
 
 ## Laufzeit anbinden
+
+Für einen privaten Zugriff ohne Domain kann der Dienst alternativ ausschließlich über einen SSH-Tunnel betrieben werden: `PUBLIC_ORIGIN=http://127.0.0.1:3001`, `HOST=127.0.0.1` und ausdrücklich `ALLOW_LOOPBACK_HTTP_OVER_SSH=true` setzen. Diese Ausnahme wird für andere Listener-/Origin-Adressen abgelehnt. Der Transport vom Rechner zur VPS ist durch SSH verschlüsselt; HTTP bleibt auf beiden Enden im Loopback. Ohne diesen expliziten Modus erfordert Produktion eine HTTPS-Origin. Mit [Open-Panel.ps1](../deploy/Open-Panel.ps1) öffnet der Besitzer unter Windows den Zugang über seinen bestehenden, hostgeprüften SSH-Alias. Der lokale Port darf nicht gleichzeitig von einer Entwicklungsvorschau belegt sein.
 
 PufferPanel entsprechend seiner [Dokumentation](https://docs.pufferpanel.com/en/3.x/installing.html) vorbereiten und den Daemon aus diesem Fork bauen. Das Root-Dockerfile enthält den Upstream-Build, benötigt eine passende Go-Toolchain und baut auch das ursprüngliche Panel. Eine unveränderte offizielle PufferPanel-Binary enthält die Backup-Korrektur nicht.
 
@@ -52,7 +54,9 @@ UID/GID müssen zur Dienstidentität des PufferPanel-Daemons und zum Besitzer de
 
 Beispiel-Service: [gameswitch.service](../deploy/gameswitch.service). Er setzt `/opt/gameswitch/gameswitch` voraus. Beispiel-Proxy: [Caddyfile](../deploy/Caddyfile.example). Dateien vor Installation an Domain, Dateisystem und Betriebssystem anpassen.
 
-Beim ersten Start erzeugt der Dienst einen Einrichtungstoken in seiner lokalen Ausgabe. Nur als Administrator auslesen, das Konto einrichten und den Token vertraulich behandeln. Sitzungen sind pro Prozess; ein Neustart meldet Browser ab. Ein einzelner GameSwitch-Prozess verwaltet ein Datenverzeichnis; mehrere parallele Instanzen mit denselben Dateien werden nicht unterstützt.
+Für eine öffentliche IP ohne Domain steht [Caddyfile.ip.example](../deploy/Caddyfile.ip.example) bereit. Mit der geprüften Caddy-Version 2.11.9 wird ein öffentlich vertrauenswürdiges Let's-Encrypt-IP-Zertifikat im `shortlived`-Profil angefordert und automatisch erneuert. Das Caddy-Datenverzeichnis muss dauerhaft erhalten bleiben; HTTPS/ACME über Port 80/443 erreichbar halten. Im GameSwitch-Dienst dann die echte HTTPS-Origin setzen, `ALLOW_LOOPBACK_HTTP_OVER_SSH` entfernen und `TRUST_LOOPBACK_PROXY=true` nur für den vorgeschalteten lokalen Proxy setzen. Backend und PufferPanel bleiben an Loopback gebunden.
+
+Beim ersten Produktionsstart schreibt der Dienst den Einrichtungstoken in `DATA_DIR/setup-token` mit privaten Dateirechten. In der Entwicklung steht er im lokalen Terminal. Nur als Administrator auslesen, das Konto einrichten und den Token vertraulich behandeln. Der interne PufferPanel-Administrator und sein OAuth-Client werden mit [bootstrap-puffer.mjs](../deploy/bootstrap-puffer.mjs) eingerichtet; die gepatchte CLI nimmt das Passwort ausschließlich über `--password-stdin` entgegen. Diese internen Zugangsdaten erscheinen nicht in Prozessargumenten oder Ausgabe. Sitzungen sind pro Prozess; ein Neustart meldet Browser ab. Ein einzelner GameSwitch-Prozess verwaltet ein Datenverzeichnis; mehrere parallele Instanzen mit denselben Dateien werden nicht unterstützt.
 
 ## Freigabetest
 

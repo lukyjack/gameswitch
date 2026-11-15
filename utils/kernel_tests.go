@@ -8,12 +8,17 @@ import (
 	"github.com/pufferpanel/pufferpanel/v3/sys"
 	"golang.org/x/sys/unix"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
 func testOpenat2() bool {
-	f, err := os.Open("/proc/kallsyms")
-	if errors.Is(err, os.ErrNotExist) {
+	return testOpenat2WithSymbols(os.Open)
+}
+
+func testOpenat2WithSymbols(openSymbols func(string) (*os.File, error)) bool {
+	f, err := openSymbols("/proc/kallsyms")
+	if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) {
 		logging.Info.Printf("Could not open /proc/kallsyms to validate kernel support, falling back to temp file test\n%s", err.Error())
 
 		var testPath string
@@ -21,8 +26,9 @@ func testOpenat2() bool {
 		if err != nil {
 			panic(fmt.Errorf("failed to validate kernel support with test file\n%s", err.Error()))
 		}
-		defer func(tar string) {
-			_ = os.Remove(tar)
+		defer func(directory string) {
+			_ = os.Remove(filepath.Join(directory, "validate"))
+			_ = os.Remove(directory)
 		}(testPath)
 
 		var testFile *os.File
@@ -35,13 +41,15 @@ func testOpenat2() bool {
 		//we have a file now, let's see if we can... read it with openat2
 		var fd int
 		fd, err = unix.Openat2(int(testFile.Fd()), "validate", &unix.OpenHow{
-			Flags: uint64(os.O_CREATE),
-			Mode:  uint64(sys.SyscallMode(0644)),
+			Flags:   uint64(os.O_CREATE | os.O_RDWR | unix.O_CLOEXEC),
+			Mode:    uint64(sys.SyscallMode(0644)),
+			Resolve: unix.RESOLVE_BENEATH,
 		})
 		if err == nil {
 			_ = unix.Close(fd)
 			useOpenat2 = true
 		} else if errors.Is(err, unix.EOPNOTSUPP) || errors.Is(err, unix.ENOSYS) {
+			logging.Info.Printf("Openat2 test syscall is unavailable: %v", err)
 			useOpenat2 = false
 		} else {
 			panic(fmt.Errorf("failed to validate kernel support with test file\n%s", err.Error()))

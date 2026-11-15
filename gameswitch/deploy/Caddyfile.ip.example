@@ -1,0 +1,15 @@
+# Set PANEL_ADDRESS to your public server IP before starting Caddy 2.11.9+.
+# An explicit public ACME issuer prevents use of an internal, untrusted IP CA.
+{
+    admin off
+    default_sni {$PANEL_ADDRESS}
+}
+
+https://{$PANEL_ADDRESS} {
+    tls {
+        issuer acme https://acme-v02.api.letsencrypt.org/directory {
+            profile shortlived
+        }
+    }
+    reverse_proxy 127.0.0.1:3001
+}

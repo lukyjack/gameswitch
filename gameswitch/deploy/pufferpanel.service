@@ -1,0 +1,32 @@
+[Unit]
+Description=GameSwitch patched PufferPanel runtime
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=pufferpanel
+Group=pufferpanel
+SupplementaryGroups=docker
+WorkingDirectory=/var/lib/pufferpanel
+ExecStart=/usr/local/bin/pufferpanel --config /etc/pufferpanel/config.json --workDir /var/lib/pufferpanel run
+Restart=on-failure
+RestartSec=5
+UMask=0027
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/etc/pufferpanel /var/lib/pufferpanel /var/log/pufferpanel
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+# RestrictSUIDSGID blocks openat2 in systemd. PufferPanel requires openat2 for
+# filesystem confinement; NoNewPrivileges remains enabled instead.
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

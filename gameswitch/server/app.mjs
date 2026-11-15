@@ -27,8 +27,8 @@ export async function createApp(options = {}) {
   const sessions = new Map();
   const app = express();
   app.disable('x-powered-by');
-  app.set('trust proxy', false);
-  app.use(helmet({ contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], scriptSrc: ["'self'"], styleSrc: ["'self'", "'unsafe-inline'"], imgSrc: ["'self'", 'data:'], objectSrc: ["'none'"], frameAncestors: ["'none'"], baseUri: ["'none'"] } }, strictTransportSecurity: config.production ? undefined : false }));
+  app.set('trust proxy', config.trustLoopbackProxy ? 'loopback' : false);
+  app.use(helmet({ contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], scriptSrc: ["'self'"], styleSrc: ["'self'", "'unsafe-inline'"], imgSrc: ["'self'", 'data:'], objectSrc: ["'none'"], frameAncestors: ["'none'"], baseUri: ["'none'"], upgradeInsecureRequests: config.secureCookies ? [] : null } }, strictTransportSecurity: config.secureCookies ? undefined : false }));
   app.use((req, res, next) => {
     const publicHost = new URL(config.origin).host;
     const ownHost = `${config.host.includes(':') ? `[${config.host}]` : config.host}:${config.port}`;
@@ -55,7 +55,7 @@ export async function createApp(options = {}) {
     const raw = token();
     const session = { username, csrfToken: token(), expires: Date.now() + config.sessionHours * 3600000 };
     sessions.set(digest(raw), session);
-    res.cookie('gameswitch_session', raw, { httpOnly: true, secure: config.production, sameSite: 'strict', path: '/', maxAge: config.sessionHours * 3600000 });
+    res.cookie('gameswitch_session', raw, { httpOnly: true, secure: config.secureCookies, sameSite: 'strict', path: '/', maxAge: config.sessionHours * 3600000 });
     return session;
   };
   app.get('/api/session', (req, res) => res.json(sessionResponse(getSession(req))));
@@ -67,6 +67,7 @@ export async function createApp(options = {}) {
     // Assignment happens before the first await: concurrent bootstrap requests cannot replace an administrator.
     store.state.admin = { username: input.username, salt, passwordHash: hashPassword(input.password, salt) };
     store.event('Administrator eingerichtet.'); await store.save();
+    await fs.rm(path.join(config.dataDir, 'setup-token'), { force: true });
     res.status(201).json(sessionResponse(makeSession(res, input.username)));
   }));
   app.post('/api/login', authLimit, asyncRoute(async (req, res) => {
@@ -88,7 +89,7 @@ export async function createApp(options = {}) {
     }
     next();
   });
-  app.post('/api/logout', (req, res) => { sessions.clear(); res.clearCookie('gameswitch_session', { path: '/', httpOnly: true, secure: config.production, sameSite: 'strict' }); res.json({ ok: true }); });
+  app.post('/api/logout', (req, res) => { sessions.clear(); res.clearCookie('gameswitch_session', { path: '/', httpOnly: true, secure: config.secureCookies, sameSite: 'strict' }); res.json({ ok: true }); });
   app.get('/api/state', asyncRoute(async (req, res) => {
     if (!controller.busy) {
       try { await controller.reconcile(); } catch { /* Unknown state is displayed; mutation still fails closed. */ }

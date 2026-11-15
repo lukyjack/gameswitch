@@ -9,7 +9,9 @@ export function readConfig(env = process.env) {
   if (!['https:', 'http:'].includes(origin.protocol)) throw new Error('PUBLIC_ORIGIN must use HTTP(S)');
   if (origin.origin !== origin.href.replace(/\/$/, '') || origin.username || origin.password) throw new Error('PUBLIC_ORIGIN must contain an origin only');
   if (!['sandbox', 'pufferpanel'].includes(env.RUNTIME_MODE || 'sandbox')) throw new Error('Invalid RUNTIME_MODE');
-  if (production && origin.protocol !== 'https:') throw new Error('Production requires an HTTPS PUBLIC_ORIGIN');
+  const loopbackTunnel = env.ALLOW_LOOPBACK_HTTP_OVER_SSH === 'true';
+  if (loopbackTunnel && (host !== '127.0.0.1' || origin.hostname !== '127.0.0.1' || origin.protocol !== 'http:')) throw new Error('SSH tunnel mode requires loopback HTTP on both listener and PUBLIC_ORIGIN');
+  if (production && origin.protocol !== 'https:' && !loopbackTunnel) throw new Error('Production requires HTTPS or explicit loopback SSH tunnel mode');
   if (!production && !['127.0.0.1', '::1', 'localhost'].includes(host)) throw new Error('Non-production mode only binds to loopback');
   let pufferUrl;
   if ((env.RUNTIME_MODE || 'sandbox') === 'pufferpanel') {
@@ -24,7 +26,7 @@ export function readConfig(env = process.env) {
     return n;
   };
   return {
-    production, host, port, origin: origin.origin,
+    production, host, port, origin: origin.origin, loopbackTunnel, secureCookies: origin.protocol === 'https:', trustLoopbackProxy: env.TRUST_LOOPBACK_PROXY === 'true',
     dataDir: path.resolve(env.DATA_DIR || './data'),
     mode: env.RUNTIME_MODE || 'sandbox',
     pufferUrl: pufferUrl?.origin,

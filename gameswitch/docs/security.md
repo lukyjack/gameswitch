@@ -13,7 +13,7 @@ Der Browser erhält keine PufferPanel-Client-Secrets. PufferPanel ist ein privil
 - Keine Standardzugangsdaten; einmaliger Einrichtungstoken und eigener Administrator.
 - Passwörter werden mit gesalzenem scrypt gehasht. Session-Cookies sind HttpOnly und SameSite Strict; HTTPS erzwingt Secure-Cookies im Produktionsbetrieb.
 - Schreibzugriffe benötigen die korrekte Origin und einen CSRF-Token. Fremde Origins werden abgelehnt. Login und Einrichtung sind begrenzt; Sitzungen laufen ab.
-- Hostname und öffentliche Origin sind explizite Konfiguration. Standardbindung ist Loopback; öffentliches Hosting benötigt eine HTTPS-Origin.
+- Hostname und öffentliche Origin sind explizite Konfiguration. Standardbindung ist Loopback; öffentliches Hosting benötigt eine HTTPS-Origin. Der explizite SSH-Tunnel-Modus erlaubt HTTP nur zwischen Loopback-Adressen an den beiden Enden des verschlüsselten Tunnels. Secure-Cookies gelten für die HTTPS-Variante; im Tunnel bleiben HttpOnly-/SameSite- und CSRF-Schutz aktiv.
 - Strikte Profilvalidierung; keine vom Browser gelieferten Shellbefehle, Dateipfade, Templates, Docker-Images oder Download-URLs. Externe Kataloganfragen verwenden festgelegte Anbieter.
 - Ressourcen- und Längenbegrenzungen sowie begrenzte HTTP-Anfragen. Keine ungefilterte HTML-Ausgabe aus Konsole, Spielnamen oder Modpackbeschreibungen.
 - Global serialisierte Lebenszyklusoperationen. Ein Backupfehler blockiert den Wechsel. Wiederherstellung nur im gestoppten Zustand mit vorherigem Sicherheitsbackup.

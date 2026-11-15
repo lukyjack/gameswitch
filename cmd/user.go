@@ -11,6 +11,7 @@ import (
 	"github.com/pufferpanel/pufferpanel/v3/services"
 	"github.com/spf13/cobra"
 	"gorm.io/gorm"
+	"io"
 	"os"
 	"strings"
 )
@@ -38,6 +39,7 @@ var addUsername string
 var addEmail string
 var addIsAdmin bool
 var addPassword string
+var addPasswordStdin bool
 
 func init() {
 	userCmd.AddCommand(AddUserCmd, EditUserCmd)
@@ -46,9 +48,19 @@ func init() {
 	AddUserCmd.Flags().StringVar(&addEmail, "email", "", "email")
 	AddUserCmd.Flags().BoolVar(&addIsAdmin, "admin", false, "if admin")
 	AddUserCmd.Flags().StringVar(&addPassword, "password", "", "password")
+	AddUserCmd.Flags().BoolVar(&addPasswordStdin, "password-stdin", false, "read password from standard input without terminal echo")
+	AddUserCmd.MarkFlagsMutuallyExclusive("password", "password-stdin")
 }
 
 func addUser(cmd *cobra.Command, args []string) {
+	if addPasswordStdin {
+		password, err := readBootstrapPassword(cmd.InOrStdin())
+		if err != nil {
+			pterm.Error.Println("Failed to read password from stdin")
+			os.Exit(1)
+		}
+		addPassword = password
+	}
 	answers := userCreate{
 		Username: addUsername,
 		Email:    addEmail,
@@ -118,7 +130,7 @@ func addUser(cmd *cobra.Command, args []string) {
 	db, err := database.GetConnection()
 	if err != nil {
 		pterm.Error.Printf("Failed to connect to database: %s\n", err.Error())
-		return
+		os.Exit(1)
 	}
 	defer database.Close()
 
@@ -160,10 +172,24 @@ func addUser(cmd *cobra.Command, args []string) {
 
 		return nil
 	}); err != nil {
-		return
+		os.Exit(1)
 	}
 
 	pterm.Info.Printf("User added\n")
+}
+
+// readBootstrapPassword accepts one bounded line. Credentials are never echoed
+// or added to the process argument list by automated bootstrap callers.
+func readBootstrapPassword(input io.Reader) (string, error) {
+	value, err := io.ReadAll(io.LimitReader(input, 1025))
+	if err != nil || len(value) > 1024 {
+		return "", errors.New("invalid password input")
+	}
+	password := strings.TrimSuffix(strings.TrimSuffix(string(value), "\n"), "\r")
+	if password == "" || strings.ContainsAny(password, "\r\n\x00") {
+		return "", errors.New("invalid password input")
+	}
+	return password, nil
 }
 
 func validateEmail(val interface{}) error {

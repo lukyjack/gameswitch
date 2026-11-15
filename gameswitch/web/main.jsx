@@ -363,7 +363,7 @@ function App() {
           <div className="topbar-right">
             <span className={`mode-pill ${sandbox ? "sandbox" : ""}`}>
               <span className="status-dot" />
-              {sandbox ? "Sandbox · lokal" : "PufferPanel verbunden"}
+              {sandbox ? "Sandbox · lokal" : "PufferPanel-Modus"}
             </span>
             <span className="topbar-divider" />
             <ShieldCheck size={18} className="muted" />
@@ -1357,7 +1357,9 @@ function Security({ state, sandbox }) {
         </p>
         <div className="connection-fact">
           <span>VPS-Deployment</span>
-          <strong>Noch ausstehend</strong>
+          <strong>
+            {sandbox ? "Noch ausstehend" : "PufferPanel konfiguriert"}
+          </strong>
         </div>
         <div className="connection-fact">
           <span>SSH-/API-Schlüssel</span>
@@ -1370,9 +1372,9 @@ function Security({ state, sandbox }) {
         <div className="system-note">
           <TriangleAlert size={16} />
           <p>
-            Vor dem späteren VPS-Start: TLS, Firewall, dedizierter
-            Dienstbenutzer und Backups außerhalb des VPS einrichten. Lokale
-            Backups schützen nicht vor einem kompletten VPS-Ausfall.
+            Administrationszugang über SSH-Tunnel oder HTTPS schützen und
+            Backups zusätzlich außerhalb des VPS speichern. Lokale Backups
+            schützen nicht vor einem kompletten VPS-Ausfall.
           </p>
         </div>
         <a
