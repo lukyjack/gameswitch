@@ -109,6 +109,17 @@ func LoadFromData(id string, source []byte) (*Server, error) {
 	}
 	data.SetFileServer(fs)
 
+	backupDirectory := filepath.Join(config.BackupsFolder.Value(), data.Id())
+	if err = os.MkdirAll(backupDirectory, 0750); err != nil {
+		_ = fs.Close()
+		return nil, err
+	}
+	data.backupServer, err = files.NewFileServer(backupDirectory, 0, 0, false)
+	if err != nil {
+		_ = fs.Close()
+		return nil, err
+	}
+
 	data.Scheduler.Start()
 
 	return data, nil

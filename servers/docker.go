@@ -365,7 +365,9 @@ func (d *Docker) createContainer(environment *pufferpanel.Environment, data puff
 	if containerMountSource != "" {
 		dir = filepath.Join(containerMountSource, "servers", environment.Server.Id())
 	} else {
-		dir = filepath.Join(environment.Server.GetFileServer().Prefix(), environment.Server.Id())
+		// The file server is already rooted in this individual server's directory.
+		// Appending the ID again mounts an empty nested directory instead of saves.
+		dir = environment.Server.GetFileServer().Prefix()
 	}
 
 	//convert root dir to a full path, so we can bind it

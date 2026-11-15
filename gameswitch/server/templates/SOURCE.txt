@@ -1,0 +1,3 @@
+PufferPanel/templates revision 7a063c4eabd8fb85128810cabcc2111516143a21
+https://github.com/PufferPanel/templates/tree/7a063c4eabd8fb85128810cabcc2111516143a21
+Apache-2.0; see LICENSE. Docker runtime limits and GameSwitch variables are applied by templates.mjs.

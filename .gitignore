@@ -27,6 +27,17 @@ favicon.ico
 /pufferpanel.msi
 /pufferpanel.wixpdb
 
+# GameSwitch: dependencies, local credentials, runtime saves and artifacts
+gameswitch/node_modules/
+gameswitch/dist/
+gameswitch/data/
+gameswitch/.env
+gameswitch/.env.*
+!gameswitch/.env.example
+gameswitch/test-results/
+gameswitch/playwright-report/
+.tools/
+
 out/
 web/tests/
 web/swagger/docs.go

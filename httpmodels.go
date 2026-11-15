@@ -1,6 +1,10 @@
 package pufferpanel
 
-import "github.com/pufferpanel/pufferpanel/v3/utils"
+import (
+	"time"
+
+	"github.com/pufferpanel/pufferpanel/v3/utils"
+)
 
 type ServerIdResponse struct {
 	Id string `json:"id"`
@@ -20,7 +24,23 @@ type ServerLogs struct {
 type ServerRunning struct {
 	Running    bool `json:"running"`
 	Installing bool `json:"installing"`
+	// GameSwitchVersion identifies the synchronous, error-reporting backup API.
+	GameSwitchVersion int                        `json:"gameswitchVersion,omitempty"`
+	BackingUp         bool                       `json:"backingUp"`
+	Restoring         bool                       `json:"restoring"`
+	Backup            *ServerFileOperationStatus `json:"backup,omitempty"`
+	Restore           *ServerFileOperationStatus `json:"restore,omitempty"`
 } //@name ServerRunning
+
+// ServerFileOperationStatus reports the result of the most recent file operation.
+// A successful HTTP request to the asynchronous API only starts the operation;
+// callers must wait for state=succeeded or use the wait=true API.
+type ServerFileOperationStatus struct {
+	State       string     `json:"state"`
+	FileName    string     `json:"fileName,omitempty"`
+	Error       string     `json:"error,omitempty"`
+	CompletedAt *time.Time `json:"completedAt,omitempty"`
+}
 
 type ServerData struct {
 	Variables map[string]Variable `json:"data"`

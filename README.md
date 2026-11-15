@@ -1,34 +1,50 @@
-# PufferPanel [![Release](https://img.shields.io/github/release/PufferPanel/PufferPanel.svg?maxAge=3600)](https://github.com/PufferPanel/PufferPanel/releases) [![Downloads](https://img.shields.io/github/downloads/PufferPanel/PufferPanel/total.svg?maxAge=3600)](https://github.com/PufferPanel/PufferPanel/releases) ![Build](https://github.com/PufferPanel/PufferPanel/workflows/Build/badge.svg)
+# GameSwitch
 
-[![PufferPanel logo](https://raw.githubusercontent.com/pufferpanel/www/master/logo-alt.png "PufferPanel")](https://pufferpanel.com)
+Eine deutschsprachige Gameserver-Oberfläche für einen einzelnen VPS: Spiele und Minecraft-Modpacks als getrennte Profile verwalten und zwischen ihnen wechseln, ohne den bisherigen Spielstand zu überschreiben.
 
-[Website](https://pufferpanel.com) |
-[Discord](https://discord.gg/v8dz49e) |
-[Documentation](https://docs.pufferpanel.com/) |
-[Translations](https://crowdin.com/project/pufferpanel)
+**Entwicklungsstand:** lokaler MVP mit Sandbox und PufferPanel-Adapter. Noch kein VPS-Deployment. Echte Spieleinstallation und Container-Isolation müssen auf einem Linux-Testhost abgenommen werden; ein erfolgreicher Sandbox-Test ersetzt diesen Schritt nicht.
 
-## What is PufferPanel?
-PufferPanel is a web-based Game Server Management System. PufferPanel allows you to manage multiple different game servers all from one central location. You can give other users their own servers or allow them to access to your servers.
+## Lokal starten
 
-## Installation
-Please follow the installation guide for PufferPanel located [here](https://docs.pufferpanel.com/en/latest/installing.html).
+Voraussetzung: Node.js 24 oder neuer.
 
-### What's different about PufferPanel?
-In addition to being a free and open source project, PufferPanel provides an easy-to-use interface for everyone from individual users to large networks. We strive to create a friendly community, and we would love for you to join us.
+```powershell
+cd gameswitch
+npm ci
+npm run dev
+```
 
-## Having issues or want to help?
-If you need help with PufferPanel, or you'd like to help out, you can contact us on [Discord](https://discord.gg/v8dz49e). Check out our [Documentation](https://docs.pufferpanel.com/) for guides on how to install, update, and manage PufferPanel.
+Öffne `http://127.0.0.1:5173`. Beim ersten Start steht der einmalige Einrichtungstoken im Server-Terminal. Damit legst du deinen Administrator und ein eigenes starkes Passwort an. Es gibt kein voreingestelltes Passwort. Die Sandbox ist in der Oberfläche gekennzeichnet und startet keine echten Spielprozesse.
 
-## Copyright Notices
-Some Javascript and CSS used is licensed under a MIT, Apache 2.0, or GPL license. Please check their header files for information.
+```powershell
+npm test
+npm run build
+npm start
+```
 
-Some images used within PufferPanel are Copyright (c) their respective owners.
+Der gebaute Server läuft standardmäßig unter `http://127.0.0.1:3001`. Konfiguration über Prozessumgebungsvariablen oder `node --env-file=.env server/index.mjs`; Beispiele stehen in [gameswitch/.env.example](gameswitch/.env.example).
 
-## Water Provided By
+## Funktionsumfang
 
-Repositories hosted by [packagecloud](https://packagecloud.io)
+- Minecraft-Profile mit auswählbaren Versionen und unterstützten Loadern; Feed-the-Beast- und Modrinth-Modpacks über Suche und konkrete Packversion, einschließlich FTB Evolution 2 aus dem offiziellen FTB-Katalog.
+- Garry's Mod mit Sandbox oder Trouble in Terrorist Town, Steam-Workshop-Collection, Map, Spielerzahl und separatem Profil.
+- Ein aktives von GameSwitch verwaltetes Profil. Wechsel: laufende Instanz geordnet beenden → vollständiges Backup bestätigen → Ziel installieren/starten. Getrennte Serververzeichnisse bewahren die ursprünglichen Welten und Konfigurationen. Zusätzliche manuell gestartete Server außerhalb der verwalteten Profile liegen außerhalb dieser Steuerung.
+- Backup-Liste, Wiederherstellung im gestoppten Zustand mit vorheriger Sicherung, Konsole, Vorgangsfortschritt und Ereignisse.
+- Persistente Profile und Jobs; widersprüchliche oder unterbrochene Abläufe brechen kontrolliert ab.
+- Ressourcenbudget passend für 8 vCPU / 16 GB RAM, mit Reserve für Betriebssystem und Panel. Große Modpacks müssen anhand ihrer eigenen Anforderungen dimensioniert werden.
 
-## AI Generated Content
+Weitere Spiele werden als geprüfte serverseitige Definitionen hinzugefügt. Beliebige Shellbefehle, Container-Images und Installations-URLs können über die Oberfläche nicht eingeschleust werden. Siehe [Erweiterungen](gameswitch/docs/extending.md).
 
-We do not accept AI generated content in any form. If we suspect something was done by AI, we will reject it. This includes PR requests,
-security advisories, and issues.
+## Sicherheit und späteres Hosting
+
+GameSwitch bindet standardmäßig nur an Loopback. Anmeldung, scrypt-Passworthashes, begrenzte Loginversuche, HttpOnly-/SameSite-Cookies, CSRF-/Origin-Prüfung, Sicherheitsheader und validierte Eingaben gehören zur Anwendung. Zugangsdaten der Laufzeit bleiben auf dem Server. GameSwitch selbst benötigt keinen Docker-Socket.
+
+Die echte Laufzeit verwendet **diesen gepatchten PufferPanel-Fork**. Die Backup-Erweiterung meldet tatsächlichen Abschluss beziehungsweise Fehler; ein unverändertes PufferPanel wird dafür abgelehnt. Das ist eine Voraussetzung für den sicheren Wechselablauf.
+
+Details: [Sicherheitsmodell](gameswitch/docs/security.md), [Hosting-Vorbereitung](gameswitch/docs/deployment.md), [API](gameswitch/docs/api-contract.md).
+
+## Basis und Lizenz
+
+Fork von [PufferPanel v3](https://github.com/pufferpanel/pufferpanel/tree/v3), Ausgangscommit `ded2eeb93980934ecb494a4550923a1fc247ef28`. Die ursprüngliche Engine, API und Oberfläche bleiben im Repository erhalten; die neue Oberfläche und ihr Orchestrator liegen unter `gameswitch/`. Das ursprüngliche README liegt unter [README.upstream.md](README.upstream.md).
+
+PufferPanel und die GameSwitch-Erweiterungen stehen unter [Apache-2.0](LICENSE). Hinweise und Lizenzen eingebundener Drittprojekte bleiben erhalten. Dieser Fork ist ein unabhängiges Projekt; Änderungen werden nicht automatisch an das Upstream-Projekt gesendet.

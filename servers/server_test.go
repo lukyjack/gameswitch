@@ -401,6 +401,7 @@ func TestLoadFromFolder(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	config.ServersFolder.Set(tmpDir, false)
+	config.BackupsFolder.Set(filepath.Join(tmpDir, "backups"), false)
 	files.ServerFS, err = files.NewFileServer(config.ServersFolder.Value(), 0, 0, false)
 	if !assert.NoError(t, err) {
 		return
@@ -420,4 +421,5 @@ func TestLoadFromFolder(t *testing.T) {
 	if !assert.NotEmpty(t, allServers) {
 		return
 	}
+	assert.NotNil(t, allServers[len(allServers)-1].backupServer, "loaded servers need an initialized backup filesystem")
 }

@@ -1,0 +1,119 @@
+import { z } from 'zod';
+
+export const catalog = [
+  { id: 'minecraft', name: 'Minecraft Java', description: 'Vanilla, Paper, Fabric, Forge, Feed the Beast und Modrinth-Modpacks', kind: 'minecraft', loaders: ['vanilla', 'paper', 'fabric', 'forge', 'ftb', 'modrinth'], defaultPort: 25565, defaultMemoryMb: 6144 },
+  { id: 'gmod', name: "Garry’s Mod", description: 'Sandbox mit Steam-Workshop-Collection', kind: 'steam', loaders: ['steam'], defaultPort: 27015, defaultMemoryMb: 4096 },
+];
+
+const id = z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/);
+const ftbId = z.string().regex(/^[1-9][0-9]{0,9}$/);
+const ftbBase = 'https://api.feed-the-beast.com/v1/modpacks/public/modpack';
+export const profileSchema = z.object({
+  name: z.string().trim().min(2).max(60).regex(/^[^\x00-\x1f\x7f]+$/),
+  gameId: z.enum(['minecraft', 'gmod']),
+  version: z.string().regex(/^(latest|[a-zA-Z0-9][a-zA-Z0-9._-]{0,39})$/),
+  loader: z.enum(['vanilla', 'paper', 'fabric', 'forge', 'ftb', 'modrinth', 'steam']),
+  modpackId: id.optional(), modpackVersion: id.optional(),
+  collectionId: z.string().max(180).optional(),
+  gamemode: z.enum(['sandbox', 'terrortown']).optional(),
+  map: z.string().regex(/^[a-zA-Z0-9_/-]{1,80}$/).refine(value => !value.includes('..')).optional(),
+  maxPlayers: z.number().int().min(1).max(128),
+  memoryMb: z.number().int().min(1024).max(13312),
+  port: z.number().int().min(1024).max(65535),
+  eulaAccepted: z.boolean().optional(),
+}).strict().superRefine((profile, ctx) => {
+  if (profile.gameId === 'minecraft' && (profile.loader === 'steam' || !profile.eulaAccepted)) ctx.addIssue({ code: 'custom', message: 'Minecraft benötigt einen gültigen Loader und die EULA-Zustimmung.' });
+  if (profile.gameId === 'gmod' && profile.loader !== 'steam') ctx.addIssue({ code: 'custom', message: 'Garry’s Mod benötigt Steam.' });
+  if (profile.gameId !== 'gmod' && profile.gamemode !== undefined) ctx.addIssue({ code: 'custom', message: 'Spielmodi sind nur für Garry’s Mod erlaubt.' });
+  if (['ftb', 'modrinth'].includes(profile.loader) && (!profile.modpackId || !profile.modpackVersion)) ctx.addIssue({ code: 'custom', message: 'Modpack und feste Modpack-Version auswählen.' });
+  if (!['ftb', 'modrinth'].includes(profile.loader) && (profile.modpackId || profile.modpackVersion)) ctx.addIssue({ code: 'custom', message: 'Modpack nur mit FTB- oder Modrinth-Loader erlaubt.' });
+  if (profile.loader === 'ftb' && (!ftbId.safeParse(profile.modpackId).success || !ftbId.safeParse(profile.modpackVersion).success)) ctx.addIssue({ code: 'custom', message: 'FTB benötigt feste numerische Pack- und Versions-IDs.' });
+});
+
+export function parseCollection(value) {
+  if (!value) return '';
+  if (/^[1-9][0-9]{4,19}$/.test(value)) return value;
+  let url;
+  const invalid = message => Object.assign(new Error(message), { status: 400 });
+  try { url = new URL(value); } catch { throw invalid('Ungültige Steam-Collection-ID oder URL.'); }
+  if (url.protocol !== 'https:' || url.hostname !== 'steamcommunity.com' || url.username || url.password || !['/sharedfiles/filedetails/', '/workshop/filedetails/'].includes(url.pathname) || !/^[1-9][0-9]{4,19}$/.test(url.searchParams.get('id') || '')) throw invalid('Nur offizielle Steam-Collection-URLs erlaubt.');
+  return url.searchParams.get('id');
+}
+
+async function providerJson(url, fetcher = fetch) {
+  const response = await fetcher(url, { redirect: 'error', signal: AbortSignal.timeout(12000), headers: { 'User-Agent': 'GameSwitch/0.1 (+https://github.com/lukyjack/gameswitch)' } });
+  if (!response.ok) throw new Error('Spielekatalog momentan nicht erreichbar.');
+  const reader = response.body.getReader();
+  const chunks = []; let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > 6_000_000) { await reader.cancel(); throw new Error('Katalogantwort zu groß.'); }
+      chunks.push(value);
+    }
+  } finally { reader.releaseLock(); }
+  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+}
+
+function normalizeFtbVersion(version) {
+  const minecraft = version.targets?.find(target => target.name === 'minecraft' && target.type === 'game');
+  const runtime = version.targets?.find(target => target.name === 'java' && target.type === 'runtime');
+  const loader = version.targets?.find(target => target.type === 'modloader');
+  const major = runtime?.version?.startsWith('1.') ? Number(runtime.version.split('.')[1]) : Number(runtime?.version?.split('.')[0]);
+  const memory = value => Number.isFinite(Number(value)) && Number(value) > 0 && Number(value) <= 1048576 ? Math.ceil(Number(value)) : undefined;
+  if (!minecraft || !/^[0-9][0-9A-Za-z._-]{0,39}$/.test(minecraft.version) || ![8, 11, 16, 17, 21, 25].includes(major) || !ftbId.safeParse(String(version.id)).success) return null;
+  return {
+    id: String(version.id), name: version.name, version: version.name,
+    gameVersions: [minecraft.version], loaders: loader?.name ? [loader.name] : [],
+    javaVersion: major, minimumMemoryMb: memory(version.specs?.minimum), recommendedMemoryMb: memory(version.specs?.recommended),
+  };
+}
+
+const validFtbResponse = data => {
+  if (data.status !== 'success') throw Object.assign(new Error('FTB-Pack oder Version nicht gefunden.'), { status: 404 });
+  return data;
+};
+
+export function providers(fetcher = fetch) {
+  return {
+    async search(query = '') {
+      const url = new URL('https://api.modrinth.com/v2/search');
+      url.search = new URLSearchParams({ query: query.slice(0, 100), limit: '12', facets: JSON.stringify([['project_type:modpack'], ['server_side:required', 'server_side:optional']]) });
+      const data = await providerJson(url, fetcher);
+      return { hits: data.hits.map(hit => ({ id: hit.project_id, slug: hit.slug, title: hit.title, description: hit.description, downloads: hit.downloads, versions: hit.versions })) };
+    },
+    async versions(projectId) {
+      id.parse(projectId);
+      const data = await providerJson(`https://api.modrinth.com/v2/project/${encodeURIComponent(projectId)}/version`, fetcher);
+      return { versions: data.filter(v => v.files?.some(f => f.filename.endsWith('.mrpack'))).slice(0, 100).map(v => ({ id: v.id, name: v.name, version: v.version_number, gameVersions: v.game_versions, loaders: v.loaders })) };
+    },
+    async minecraft() {
+      const data = await providerJson('https://piston-meta.mojang.com/mc/game/version_manifest_v2.json', fetcher);
+      return { versions: data.versions.filter(v => v.type === 'release').slice(0, 80).map(v => v.id) };
+    },
+    async ftbSearch(query = '') {
+      const url = new URL(`${ftbBase}/search/12/detailed`);
+      url.searchParams.set('term', query.trim().slice(0, 100) || 'FTB');
+      const data = validFtbResponse(await providerJson(url, fetcher));
+      return { hits: (data.packs || []).filter(pack => pack.provider === 'ftb' && ftbId.safeParse(String(pack.id)).success).slice(0, 12).map(pack => ({ id: String(pack.id), slug: String(pack.id), title: pack.name, description: pack.synopsis || '', downloads: Number(pack.installs) || 0, versions: [], provider: 'ftb' })) };
+    },
+    async ftbVersions(packId) {
+      ftbId.parse(packId);
+      const data = validFtbResponse(await providerJson(`${ftbBase}/${packId}`, fetcher));
+      if (data.private || String(data.id) !== packId || !Array.isArray(data.versions)) throw Object.assign(new Error('FTB-Pack ist nicht öffentlich verfügbar.'), { status: 404 });
+      const versions = data.versions.filter(version => !version.private && version.type === 'release').sort((a, b) => Number(b.released || b.updated) - Number(a.released || a.updated)).slice(0, 100).map(normalizeFtbVersion).filter(Boolean);
+      return { pack: { id: String(data.id), name: data.name }, versions };
+    },
+    async ftbVersion(packId, versionId) {
+      ftbId.parse(packId); ftbId.parse(versionId);
+      // The pack lists exact per-version targets/specs. Its full version endpoint also includes huge file manifests, unnecessary for safe selection.
+      const pack = validFtbResponse(await providerJson(`${ftbBase}/${packId}`, fetcher));
+      const selected = pack.versions?.find(version => String(version.id) === versionId);
+      const version = selected ? normalizeFtbVersion(selected) : null;
+      if (pack.private || String(pack.id) !== packId || !version || selected.private || selected.type !== 'release') throw Object.assign(new Error('FTB-Version ist nicht öffentlich verfügbar oder inkompatibel.'), { status: 400 });
+      return version;
+    },
+  };
+}

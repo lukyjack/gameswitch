@@ -843,9 +843,16 @@ func getStatus(c *gin.Context) {
 	server := getServerFromGin(c)
 
 	installing := server.GetEnvironment().IsInstalling()
+	backup := server.BackupStatus()
+	restore := server.RestoreStatus()
+	status := &pufferpanel.ServerRunning{
+		Installing: installing, GameSwitchVersion: 1,
+		BackingUp: backup.State == "running", Restoring: restore.State == "running",
+		Backup: &backup, Restore: &restore,
+	}
 
 	if installing {
-		c.JSON(http.StatusOK, &pufferpanel.ServerRunning{Installing: installing})
+		c.JSON(http.StatusOK, status)
 		return
 	}
 
@@ -853,7 +860,8 @@ func getStatus(c *gin.Context) {
 
 	if response.HandleError(c, err, http.StatusInternalServerError) {
 	} else {
-		c.JSON(http.StatusOK, &pufferpanel.ServerRunning{Running: running})
+		status.Running = running
+		c.JSON(http.StatusOK, status)
 	}
 }
 
@@ -917,7 +925,12 @@ func createBackup(c *gin.Context) {
 		return
 	}
 
-	id, err := server.StartBackup()
+	var id string
+	if utils.GetQueryBool(c, "wait") {
+		id, err = server.Backup()
+	} else {
+		id, err = server.StartBackup()
+	}
 
 	if response.HandleError(c, err, http.StatusInternalServerError) {
 		return
@@ -947,12 +960,21 @@ func restoreBackup(c *gin.Context) {
 		return
 	}
 
-	err = server.StartRestore(fileName)
+	wait := utils.GetQueryBool(c, "wait")
+	if wait {
+		err = server.Restore(fileName)
+	} else {
+		err = server.StartRestore(fileName)
+	}
 
 	if response.HandleError(c, err, http.StatusInternalServerError) {
 		return
 	}
-	c.Status(http.StatusAccepted)
+	if wait {
+		c.Status(http.StatusNoContent)
+	} else {
+		c.Status(http.StatusAccepted)
+	}
 }
 
 func downloadBackup(c *gin.Context) {

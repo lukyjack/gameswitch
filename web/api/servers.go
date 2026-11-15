@@ -1048,7 +1048,7 @@ func createBackup(c *gin.Context) {
 		return
 	}
 
-	if callResponse.StatusCode == http.StatusBadRequest { //If its a local node, the err will not be set, have to check the status code
+	if callResponse.StatusCode < http.StatusOK || callResponse.StatusCode >= http.StatusMultipleChoices {
 		newHeaders := cleanHttpReturnErrors(callResponse.Header)
 
 		c.DataFromReader(callResponse.StatusCode, callResponse.ContentLength, callResponse.Header.Get("Content-Type"), callResponse.Body, newHeaders)
@@ -1151,7 +1151,11 @@ func restoreBackup(c *gin.Context) {
 		return
 	}
 
-	resolvedPath := "/daemon/server/" + server.Identifier + "/backup/restore" + "?fileName=" + backup.FileName
+	params := url.Values{"fileName": []string{backup.FileName}}
+	if utils.GetQueryBool(c, "wait") {
+		params.Set("wait", "true")
+	}
+	resolvedPath := "/daemon/server/" + server.Identifier + "/backup/restore?" + params.Encode()
 
 	callResponse, err := ns.CallNode(node, "POST", resolvedPath, nil, nil)
 	defer utils.CloseResponse(callResponse)
@@ -1159,7 +1163,7 @@ func restoreBackup(c *gin.Context) {
 		return
 	}
 
-	if callResponse.StatusCode == http.StatusBadRequest { //If its a local node, the err will not be set, have to check the status code
+	if callResponse.StatusCode < http.StatusOK || callResponse.StatusCode >= http.StatusMultipleChoices {
 		newHeaders := cleanHttpReturnErrors(callResponse.Header)
 
 		c.DataFromReader(callResponse.StatusCode, callResponse.ContentLength, callResponse.Header.Get("Content-Type"), callResponse.Body, newHeaders)

@@ -1,0 +1,5 @@
+# Replace with your real domain. Keep the GameSwitch listener on loopback.
+# Restrict access to your VPN at the firewall for private administration.
+panel.example.com {
+    reverse_proxy 127.0.0.1:3001
+}
