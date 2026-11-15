@@ -14,6 +14,8 @@ Die gemeinsame Lebenszyklussteuerung in `server/controller.mjs` und der Laufzeit
 
 Modrinth und der offizielle öffentliche FTB-Katalog sind integriert. FTB verwendet feste Pack-/Versions-IDs und den offiziellen Installer über den FTBA-Modus des itzg-Laufzeitimages. Minecraft-/Java-Version sowie RAM-Minimum stammen aus den offiziellen Versionsmetadaten; bei FTB Evolution 2 wählt die Oberfläche beispielsweise Java 25 und standardmäßig 12 GB Profil-RAM, soweit das Hostbudget dies erlaubt. Mindestens 2 GB bleiben außerhalb des Java-Heaps frei; das Heap-Maximum ist zusätzlich auf die Packempfehlung begrenzt. Evolution 2 verwendet damit 8 GB maximalen und 2 GB anfänglichen Heap. Änderungen werden erst beim nächsten regulären Start einer gestoppten Instanz übernommen. Die Spieler benötigen auf ihrem PC dieselbe Packversion, etwa über die FTB App. Das Panel installiert den dedizierten Server.
 
+Minecraft-Container dürfen das konfigurierte Host-CPU-Budget verwenden, auf dem Ziel-VPS also bis zu acht vCPU. Die vorhandene FTB-Definition wird beim nächsten regulären Start im gestoppten Zustand entsprechend abgeglichen. Das erlaubt zusätzliche parallele Hintergrundarbeit; es verteilt den überwiegend seriellen Minecraft-Haupttick nicht auf mehrere Kerne.
+
 CurseForge benötigt eine zusätzliche eigene Anbieteranbindung sowie Prüfung von API-Schlüsseln, Nutzungsbedingungen und Serverpack-Installationsformaten. Eine CurseForge-URL als Modrinth-Pack auszugeben wäre keine Unterstützung. Für vorhandene Mods ist ein dediziertes, versionsgebundenes Modpack der nachvollziehbare Weg.
 
 ## Steam-Inhalte

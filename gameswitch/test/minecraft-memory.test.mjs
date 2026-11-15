@@ -42,9 +42,9 @@ test('the next stopped FTB start updates only resource settings and preserves pa
   const calls = []; let running = false;
   const original = {
     run: { environmentVars: { MEMORY: '9472M', FTB_MODPACK_ID: '135', FTB_MODPACK_VERSION_ID: '100614', LEVEL: 'existing-world', CUSTOM_SETTING: 'unchanged' } },
-    environment: { hostConfig: { Memory: 10 * 1024 ** 3, MemorySwap: 10 * 1024 ** 3, CapDrop: ['ALL'] }, config: { User: '1000:1000' } },
+    environment: { hostConfig: { Memory: 10 * 1024 ** 3, MemorySwap: 10 * 1024 ** 3, NanoCpus: 6_000_000_000, CapDrop: ['ALL'] }, config: { User: '1000:1000' } },
   };
-  const runtime = new PufferRuntime({ pufferUrl: 'https://runtime.example' }, async (url, options) => {
+  const runtime = new PufferRuntime({ pufferUrl: 'https://runtime.example', cpuCores: 8 }, async (url, options) => {
     calls.push({ url, ...options });
     if (url.endsWith('/oauth2/token')) return Response.json({ access_token: 'fixture' });
     if (url.endsWith('/status')) return Response.json({ gameswitchVersion: 1, running });
@@ -55,6 +55,7 @@ test('the next stopped FTB start updates only resource settings and preserves pa
   await runtime.start({ gameId: 'minecraft', loader: 'ftb', serverId: 'ftb-fixture', memoryMb: 12288, recommendedMemoryMb: 8192 });
   const definition = JSON.parse(calls.find(call => call.url.endsWith('/definition') && call.method === 'PUT').body);
   assert.equal(definition.environment.hostConfig.Memory, 12 * 1024 ** 3);
+  assert.equal(definition.environment.hostConfig.NanoCpus, 8_000_000_000);
   assert.equal(definition.run.environmentVars.MAX_MEMORY, '8192M');
   assert.equal(definition.run.environmentVars.LEVEL, 'existing-world');
   assert.equal(definition.run.environmentVars.FTB_MODPACK_VERSION_ID, '100614');

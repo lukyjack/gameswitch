@@ -18,7 +18,7 @@ function docker(profile, config, image, containerRoot = '/pufferpanel') {
     type: 'docker', image, containerRoot, networkName: 'bridge',
     portBindings: [`0.0.0.0:${profile.port}:${profile.port}/tcp`, ...(profile.gameId === 'gmod' ? [`0.0.0.0:${profile.port}:${profile.port}/udp`] : [])],
     config: { User: `${config.gameUid}:${config.gameGid}` },
-    hostConfig: { CapDrop: ['ALL'], SecurityOpt: ['no-new-privileges:true'], Memory: profile.memoryMb * 1024 * 1024, MemorySwap: profile.memoryMb * 1024 * 1024, NanoCpus: Math.min(config.cpuCores, 6) * 1_000_000_000, PidsLimit: 512, Tmpfs: { '/tmp': 'rw,noexec,nosuid,size=512m' }, Privileged: false },
+    hostConfig: { CapDrop: ['ALL'], SecurityOpt: ['no-new-privileges:true'], Memory: profile.memoryMb * 1024 * 1024, MemorySwap: profile.memoryMb * 1024 * 1024, NanoCpus: (profile.gameId === 'minecraft' ? config.cpuCores : Math.min(config.cpuCores, 6)) * 1_000_000_000, PidsLimit: 512, Tmpfs: { '/tmp': 'rw,noexec,nosuid,size=512m' }, Privileged: false },
   };
 }
 

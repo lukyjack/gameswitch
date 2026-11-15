@@ -123,11 +123,13 @@ export class PufferRuntime {
       const definition = await this.request(`${this.endpoint(profile)}/definition`);
       const environment = ftbEnvironment(profile, definition.run.environmentVars);
       const limit = profile.memoryMb * 1024 * 1024;
-      const changed = definition.environment.hostConfig.Memory !== limit || definition.environment.hostConfig.MemorySwap !== limit || JSON.stringify(environment) !== JSON.stringify(definition.run.environmentVars);
+      const nanoCpus = this.config.cpuCores * 1_000_000_000;
+      const changed = definition.environment.hostConfig.Memory !== limit || definition.environment.hostConfig.MemorySwap !== limit || definition.environment.hostConfig.NanoCpus !== nanoCpus || JSON.stringify(environment) !== JSON.stringify(definition.run.environmentVars);
       if (changed) {
         definition.run.environmentVars = environment;
         definition.environment.hostConfig.Memory = limit;
         definition.environment.hostConfig.MemorySwap = limit;
+        definition.environment.hostConfig.NanoCpus = nanoCpus;
         await this.request(`${this.endpoint(profile)}/definition`, { method: 'PUT', body: definition });
       }
     }

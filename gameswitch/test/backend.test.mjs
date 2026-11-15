@@ -284,6 +284,7 @@ test('FTB profiles pin exact IDs and validate version, Java metadata and heap re
   assert.equal(definition.run.environmentVars.MEMORY, '8192M');
   assert.equal(definition.run.environmentVars.MAX_MEMORY, '8192M');
   assert.equal(definition.run.environmentVars.INIT_MEMORY, '2048M');
+  assert.equal(definition.environment.hostConfig.NanoCpus, 8_000_000_000);
   assert.equal(definition.run.environmentVars.VERSION, undefined);
   assert.equal(definition.run.autorestart, false);
 });
