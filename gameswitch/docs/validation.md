@@ -2,7 +2,7 @@
 
 ## Automatisiert bestanden
 
-- `npm test`: 19 Node-Integrationstests. Authentifizierung und Cookieflags, fremde Origin/CSRF, Eingabe-/Port-/RAM-Grenzen, serialisierte Wechselreihenfolge, Backupfehler einschließlich Wiederholung, Restore mit Sicherheitskopie, unterbrochene Vorgänge nach Neustart, gesperrter Start nach unvollständigem Restore, PufferPanel-HTTP-Vertrag, sichere Definitionen/Java-Zuordnung, Sperre nach fehlgeschlagener Zustandspersistenz, FTB-Metadaten/feste Packversionen/RAM-Prüfung, validierter TTT-Spielmodus, privater OAuth-Bootstrap einschließlich Wiederanlauf/Startreihenfolge und streng begrenzte SSH-Transportkonfiguration.
+- `npm test`: 30 Node-Tests. Authentifizierung und Cookieflags, fremde Origin/CSRF, Eingabe-/Port-/RAM-Grenzen, serialisierte Wechselreihenfolge, Backupfehler einschließlich Wiederholung, Restore mit Sicherheitskopie, unterbrochene Vorgänge nach Neustart, gesperrter Start nach unvollständigem Restore, PufferPanel-HTTP-Vertrag, sichere Definitionen/Java-Zuordnung, Sperre nach fehlgeschlagener Zustandspersistenz, FTB-Metadaten/feste Packversionen/RAM-Prüfung, validierter TTT-Spielmodus, privater OAuth-Bootstrap einschließlich Wiederanlauf/Startreihenfolge und streng begrenzte SSH-Transportkonfiguration. Neue Prüfungen decken Konsolenvalidierung, Auth/CSRF, Audit ohne Argumente, exklusive Lebenszyklussperre, Persistenzfehler vor Versand, unsichere Zustellung ohne Wiederholung sowie FTB-Heapreserve und ausschließlich im gestoppten Zustand angepasste Definitionen ab. Alte Profile mit inzwischen zu kleinem RAM-Budget werden vor Konfigurationsänderung und Start abgewiesen.
 - `npm run build`: React-Produktionsbuild mit Vite erfolgreich.
 - `npm audit`: keine gemeldeten Schwachstellen zum Prüfzeitpunkt; keine Garantie für unbekannte Schwachstellen.
 - Go 1.27.4: `./servers` mit 8 Testfunktionen beziehungsweise 13 Blattfällen bestanden. Dazu gehören vollständige Backup-/Restore-Rundläufe, fehlende/beschädigte Archive, abgelehnte Pfade und Links, Schreibfehler sowie konkurrierende Start-/Dateioperationen.
@@ -20,11 +20,13 @@ GameSwitch, die gepatchte native PufferPanel-Binary und Caddy 2.11.9 laufen als 
 
 Eine über die echte PufferPanel-API erstellte Testinstanz lief in Docker mit UID/GID 1000, Bridge-Netz, CapDrop ALL, no-new-privileges und effektivem RAM-Limit. Start, geordnetes Stoppen, vollständiges Backup, Änderung der Testdatei und Wiederherstellung des ursprünglichen Inhalts bestanden. Die Testinstanz wurde anschließend entfernt. Dies war ein technischer Testprozess, kein Minecraft- oder GMod-Server.
 
-Externe HTTPS-Prüfungen: Startseite 200, unauthentifizierter Zustand 401, fremde Origin 403, HSTS/CSP vorhanden. Die erste Administratoreinrichtung bleibt dem Eigentümer überlassen. Keine echten Passwörter wurden in Git oder Prozessargumente übernommen.
+Externe HTTPS-Prüfungen: Startseite 200, unauthentifizierter Zustand 401, fremde Origin 403, HSTS/CSP vorhanden. Der Eigentümer hat den Administratorzugang eingerichtet. Keine echten Passwörter wurden in Git oder Prozessargumente übernommen.
+
+FTB Evolution 2 1.9.0 (Minecraft 26.1.2, Java 25) wurde vom Eigentümer gestartet. Der erste Prozess wurde nachweislich durch das Container-RAM-Limit von 10 GiB beendet: 9472 MiB maximaler und anfänglicher Java-Heap ließen zu wenig nativen Spielraum. Das Limit der anschließend laufenden Instanz wurde ohne Neustart auf 12 GiB erhöht. Container-ID, Startzeit und Neustartzähler blieben beim Panel-Update unverändert. Eine externe Minecraft-Statusabfrage bestätigte Erreichbarkeit auf Port 25565 und drei verbundene Spieler; Docker-Health war zuletzt healthy. Der neue Laufzeitadapter übermittelte einmalig den lesenden Befehl `list`; die Antwort wurde in der echten Minecraft-Konsole bestätigt. Es wurden keine OP-Rechte vergeben. Die korrigierten 8 GiB maximaler/2 GiB anfänglicher Heap gelten erst beim nächsten regulären Start; die laufende JVM wurde nicht verändert.
 
 ## Noch offen für den jeweiligen Spielbetrieb
 
-- Echte Docker-Starts von Minecraft Vanilla/Loadern/Modpacks sowie GMod und Collection-Downloads.
+- Echte Docker-Starts anderer Minecraft-Varianten sowie GMod und Collection-Downloads.
 - Gamespezifische Bereitschaft statt bloß laufendem Prozess. Ein großer Modpack-Server kann während der Initialisierung als laufend erscheinen.
 - Live-Tests für vollen Backupdatenträger, Netzunterbrechung, Prozessabbruch und Wiederherstellung realer Weltdaten; externe Backups und Updatestrategie.
 - Keine externe Penetrationsprüfung, kein Sicherheitszertifikat und keine Mehrmandanten-Isolationsfreigabe.

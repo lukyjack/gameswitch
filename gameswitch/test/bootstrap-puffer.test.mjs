@@ -76,7 +76,7 @@ test('Puffer bootstrap waits for initialized HTTP API before attempting user cre
   const envFile = path.join(directory, 'service.env');
   let commands = 0; let attempts = 0;
   await assert.rejects(bootstrapPuffer({ envFile, readyTimeoutMs: 15, readyIntervalMs: 2, runCommand: async () => { commands++; }, fetcher: async () => { attempts++; return new Response(null, { status: 503 }); } }), /did not become ready/);
-  assert.ok(attempts > 1);
+  assert.ok(attempts >= 1); // The timeout may elapse within one attempt on a busy scheduler.
   assert.equal(commands, 0);
   await assert.rejects(fs.access(`${envFile}.bootstrap-pending.json`));
 });

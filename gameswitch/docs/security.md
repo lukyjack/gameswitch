@@ -17,6 +17,7 @@ Der Browser erhält keine PufferPanel-Client-Secrets. PufferPanel ist ein privil
 - Strikte Profilvalidierung; keine vom Browser gelieferten Shellbefehle, Dateipfade, Templates, Docker-Images oder Download-URLs. Externe Kataloganfragen verwenden festgelegte Anbieter.
 - Ressourcen- und Längenbegrenzungen sowie begrenzte HTTP-Anfragen. Keine ungefilterte HTML-Ausgabe aus Konsole, Spielnamen oder Modpackbeschreibungen.
 - Global serialisierte Lebenszyklusoperationen. Ein Backupfehler blockiert den Wechsel. Wiederherstellung nur im gestoppten Zustand mit vorherigem Sicherheitsbackup.
+- Die Minecraft-Konsole ist nur für den angemeldeten Administrator verfügbar, mit CSRF-/Origin-Prüfung, Befehlsrate und einzeiliger Eingabe ohne Steuerzeichen. Sie verwendet den Spieleingabekanal ohne Shell und teilt die Lebenszyklussperre. Audit-Ereignisse enthalten nur das Befehlswort. Minecraft- und Mod-Befehle können weitreichende Spielrechte haben; die Sperre häufiger direkter Stoppbefehle ersetzt keine Befehls-Sandbox.
 - Persistierte Daten und lokale Geheimnisse liegen außerhalb der Git-Verfolgung. Keine Passwörter in Browser-Storage oder API-Antworten.
 
 ## Spiele und Mods sind ausführbarer Fremdcode

@@ -3,6 +3,8 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { buildDefinition } from './templates.mjs';
+import { consoleCommandSchema } from './console-command.mjs';
+import { ftbEnvironment } from './minecraft-memory.mjs';
 
 export class SandboxRuntime {
   constructor(config) { this.config = config; this.directory = path.join(config.dataDir, 'sandbox'); }
@@ -39,6 +41,14 @@ export class SandboxRuntime {
     await this.write(profile, state);
   }
   async console(profile) { return (await this.read(profile)).lines.slice(-100); }
+  async command(profile, input) {
+    const { command } = consoleCommandSchema.parse({ command: input });
+    const state = await this.read(profile);
+    if (!state.running) throw Object.assign(new Error('Der Minecraft-Server läuft gerade nicht.'), { status: 409 });
+    state.lines.push(`Sandbox: > ${command}`, 'Sandbox: Befehl simuliert; keine echte Spielwelt verändert.');
+    state.lines = state.lines.slice(-200);
+    await this.write(profile, state);
+  }
 }
 
 export class PufferRuntime {
@@ -108,6 +118,19 @@ export class PufferRuntime {
     if ((await this.status(profile)).running) throw new Error('Instanz wurde nicht beendet. Wechsel abgebrochen.');
   }
   async start(profile) {
+    if (profile.gameId === 'minecraft' && profile.loader === 'ftb') {
+      if ((await this.status(profile)).running) throw Object.assign(new Error('Dieses Profil läuft bereits. Es wurde nicht neu gestartet.'), { status: 409 });
+      const definition = await this.request(`${this.endpoint(profile)}/definition`);
+      const environment = ftbEnvironment(profile, definition.run.environmentVars);
+      const limit = profile.memoryMb * 1024 * 1024;
+      const changed = definition.environment.hostConfig.Memory !== limit || definition.environment.hostConfig.MemorySwap !== limit || JSON.stringify(environment) !== JSON.stringify(definition.run.environmentVars);
+      if (changed) {
+        definition.run.environmentVars = environment;
+        definition.environment.hostConfig.Memory = limit;
+        definition.environment.hostConfig.MemorySwap = limit;
+        await this.request(`${this.endpoint(profile)}/definition`, { method: 'PUT', body: definition });
+      }
+    }
     await this.request(`${this.endpoint(profile)}/start?wait=true`, { method: 'POST', timeout: 180000 });
     await delay(1200);
     if (!(await this.status(profile)).running) throw new Error('Spielprozess ist beim Start beendet worden. Konsole prüfen.');
@@ -132,5 +155,15 @@ export class PufferRuntime {
     const data = await this.request(`${this.endpoint(profile)}/console`, { timeout: 15000 });
     const text = typeof data?.logs === 'string' ? Buffer.from(data.logs, 'base64').toString('utf8') : '';
     return text.slice(-32000).replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').split(/\r?\n/).slice(-150);
+  }
+  async command(profile, input) {
+    const { command } = consoleCommandSchema.parse({ command: input });
+    const status = await this.status(profile);
+    if (!status.running) throw Object.assign(new Error('Der Minecraft-Server läuft gerade nicht.'), { status: 409 });
+    try {
+      await this.request(`${this.endpoint(profile)}/console`, { method: 'POST', body: command, text: true, timeout: 15000 });
+    } catch {
+      throw Object.assign(new Error('Die Bestätigung fehlt. Der Befehl kann bereits ausgeführt worden sein. Bitte die Konsole prüfen; es wird nicht automatisch erneut gesendet.'), { code: 'CONSOLE_DELIVERY_UNCERTAIN' });
+    }
   }
 }

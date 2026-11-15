@@ -2,7 +2,7 @@
 
 Eine deutschsprachige Gameserver-Oberfläche für einen einzelnen VPS: Spiele und Minecraft-Modpacks als getrennte Profile verwalten und zwischen ihnen wechseln, ohne den bisherigen Spielstand zu überschreiben.
 
-**Entwicklungsstand:** MVP mit Sandbox und PufferPanel-Adapter; auf Debian 13 mit Docker und HTTPS eingerichtet. Start/Stopp, Containerrechte und Backup/Wiederherstellung wurden gegen die echte Laufzeit geprüft. Die vollständige Installation einzelner Minecraft-Modpacks und GMod-Collections wird beim jeweiligen ersten Spielstart geprüft.
+**Entwicklungsstand:** MVP mit Sandbox und PufferPanel-Adapter; auf Debian 13 mit Docker und HTTPS eingerichtet. Start/Stopp, Containerrechte und Backup/Wiederherstellung wurden gegen die echte Laufzeit geprüft. FTB Evolution 2 1.9.0 ist mit verbundenen Spielern nachgewiesen; weitere Minecraft-Varianten und GMod-Collections benötigen ihre jeweiligen Spieltests.
 
 ## Lokal starten
 
@@ -30,6 +30,7 @@ Der gebaute Server läuft standardmäßig unter `http://127.0.0.1:3001`. Konfigu
 - Garry's Mod mit Sandbox oder Trouble in Terrorist Town, Steam-Workshop-Collection, Map, Spielerzahl und separatem Profil.
 - Ein aktives von GameSwitch verwaltetes Profil. Wechsel: laufende Instanz geordnet beenden → vollständiges Backup bestätigen → Ziel installieren/starten. Getrennte Serververzeichnisse bewahren die ursprünglichen Welten und Konfigurationen. Zusätzliche manuell gestartete Server außerhalb der verwalteten Profile liegen außerhalb dieser Steuerung.
 - Backup-Liste, Wiederherstellung im gestoppten Zustand mit vorheriger Sicherung, Konsole, Vorgangsfortschritt und Ereignisse.
+- Minecraft-Konsole mit Befehleingabe und OP-Hilfe für einen Spielernamen. Befehle benötigen eine angemeldete Administratorsitzung und werden ohne Shell an die laufende Instanz gesendet.
 - Persistente Profile und Jobs; widersprüchliche oder unterbrochene Abläufe brechen kontrolliert ab.
 - Ressourcenbudget passend für 8 vCPU / 16 GB RAM, mit Reserve für Betriebssystem und Panel. Große Modpacks müssen anhand ihrer eigenen Anforderungen dimensioniert werden.
 

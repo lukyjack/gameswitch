@@ -222,7 +222,11 @@ function App() {
       );
       setConsoleLines(result.lines || []);
     } catch (e) {
-      setError(e.message);
+      if (e.status === 401) {
+        csrfToken = "";
+        setConsoleProfile(null);
+        setSession({ authenticated: false });
+      } else setError(e.message);
     }
   };
   useEffect(() => {
@@ -231,7 +235,13 @@ function App() {
       () =>
         api(`/profiles/${encodeURIComponent(consoleProfile.id)}/console`)
           .then((d) => setConsoleLines(d.lines || []))
-          .catch(() => {}),
+          .catch((e) => {
+            if (e.status === 401) {
+              csrfToken = "";
+              setConsoleProfile(null);
+              setSession({ authenticated: false });
+            }
+          }),
       4000,
     );
     return () => clearInterval(timer);
@@ -833,17 +843,53 @@ function App() {
               <span className="status-dot" />
               {sandbox ? "Sandbox-Protokoll" : "Serverausgabe"}
             </span>
-            <span>Nur Lesezugriff</span>
+            <span>
+              {isMinecraft(consoleProfile)
+                ? "Minecraft-Konsole"
+                : "Nur Lesezugriff"}
+            </span>
           </div>
           <pre className="console-output">
             {consoleLines.length
               ? consoleLines.join("\n")
               : "Noch keine Konsolenausgabe vorhanden."}
           </pre>
+          {isMinecraft(consoleProfile) && (
+            <ConsoleInput
+              key={consoleProfile.id}
+              profile={
+                profiles.find((profile) => profile.id === consoleProfile.id) ||
+                consoleProfile
+              }
+              sandbox={sandbox}
+              locked={runningJob}
+              onSent={async () => {
+                try {
+                  const result = await api(
+                    `/profiles/${encodeURIComponent(consoleProfile.id)}/console`,
+                  );
+                  setConsoleLines(result.lines || []);
+                } catch (e) {
+                  if (e.status === 401) {
+                    csrfToken = "";
+                    setConsoleProfile(null);
+                    setSession({ authenticated: false });
+                  }
+                }
+              }}
+              onUnauthorized={() => {
+                csrfToken = "";
+                setConsoleProfile(null);
+                setSession({ authenticated: false });
+              }}
+            />
+          )}
           <div className="modal-footer">
             <p>
               <LockKeyhole size={14} />
-              Keine freien Shell-Befehle über diese Oberfläche.
+              {isMinecraft(consoleProfile)
+                ? "Befehle gehen nur an dieses Minecraft-Profil."
+                : "Konsolenausgabe dieses Spielprofils."}
             </p>
             <button
               className="button subtle"
@@ -854,6 +900,205 @@ function App() {
           </div>
         </Modal>
       )}
+    </div>
+  );
+}
+
+function ConsoleInput({ profile, sandbox, locked, onSent, onUnauthorized }) {
+  const [command, setCommand] = useState("");
+  const [player, setPlayer] = useState("");
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const history = useRef([]);
+  const sendingLock = useRef(false);
+  const historyPosition = useRef(-1);
+  const commandDraft = useRef("");
+  const unavailable = locked || profile.status !== "running";
+  const validPlayer = /^[A-Za-z0-9_]{3,16}$/.test(player.trim());
+
+  const send = async (value, kind) => {
+    if (sendingLock.current || unavailable) return;
+    const submitted = value.trim();
+    if (
+      !submitted ||
+      submitted.length > 1024 ||
+      /[\r\n\x00-\x1f\x7f-\x9f\u2028\u2029]/.test(submitted)
+    ) {
+      setError(
+        "Bitte einen einzelnen Befehl mit höchstens 1024 Zeichen eingeben.",
+      );
+      return;
+    }
+    sendingLock.current = true;
+    setSending(true);
+    setError("");
+    setNotice("");
+    try {
+      await api(`/profiles/${encodeURIComponent(profile.id)}/console`, {
+        method: "POST",
+        body: { command: submitted },
+      });
+      history.current = [submitted, ...history.current].slice(0, 30);
+      historyPosition.current = -1;
+      commandDraft.current = "";
+      if (kind === "operator") setPlayer("");
+      else setCommand("");
+      setNotice(
+        sandbox
+          ? "Befehl in der Sandbox angenommen. Hier läuft kein Minecraft-Server."
+          : "Befehl übermittelt. Ob er ausgeführt wurde, siehst du in der Serverausgabe.",
+      );
+      await onSent();
+    } catch (e) {
+      if (e.status === 401) onUnauthorized();
+      else setError(e.message);
+    } finally {
+      sendingLock.current = false;
+      setSending(false);
+    }
+  };
+
+  return (
+    <div className="console-controls">
+      {unavailable && (
+        <p className="console-help console-disabled" role="status">
+          {locked
+            ? "Während einer Serveraktion ist die Befehlseingabe gesperrt."
+            : "Befehle sind nur für ein laufendes Minecraft-Profil verfügbar."}
+        </p>
+      )}
+      {error && (
+        <div className="alert alert-error" role="alert">
+          <TriangleAlert size={16} />
+          <span>{error}</span>
+        </div>
+      )}
+      {notice && (
+        <div className="alert alert-success" role="status">
+          <Check size={16} />
+          <span>{notice}</span>
+        </div>
+      )}
+      <form
+        className="console-command-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          send(command, "command");
+        }}
+      >
+        <label htmlFor="minecraft-console-command">Minecraft-Befehl</label>
+        <div className="console-input-row">
+          <span aria-hidden="true" className="console-prompt">
+            &gt;
+          </span>
+          <input
+            id="minecraft-console-command"
+            value={command}
+            onChange={(event) => {
+              setCommand(event.target.value);
+              historyPosition.current = -1;
+            }}
+            onKeyDown={(event) => {
+              if (
+                !["ArrowUp", "ArrowDown"].includes(event.key) ||
+                !history.current.length
+              )
+                return;
+              event.preventDefault();
+              if (event.key === "ArrowUp") {
+                if (historyPosition.current === -1)
+                  commandDraft.current = command;
+                historyPosition.current = Math.min(
+                  historyPosition.current + 1,
+                  history.current.length - 1,
+                );
+              } else
+                historyPosition.current = Math.max(
+                  historyPosition.current - 1,
+                  -1,
+                );
+              setCommand(
+                historyPosition.current === -1
+                  ? commandDraft.current
+                  : history.current[historyPosition.current],
+              );
+            }}
+            maxLength={1024}
+            required
+            disabled={unavailable || sending}
+            autoComplete="off"
+            autoCapitalize="none"
+            spellCheck={false}
+            placeholder="z. B. op DeinSpielername"
+            aria-describedby="minecraft-console-help"
+          />
+          <button
+            className="button primary"
+            type="submit"
+            disabled={unavailable || sending || !command.trim()}
+          >
+            {sending ? (
+              <LoaderCircle className="spin" size={15} />
+            ) : (
+              <ArrowRight size={15} />
+            )}
+            Senden
+          </button>
+        </div>
+        <p className="console-help" id="minecraft-console-help">
+          Ohne führenden Schrägstrich eingeben und mit Enter senden, z. B.{" "}
+          <code>list</code>, <code>op DeinSpielername</code> oder{" "}
+          <code>deop DeinSpielername</code>. Während Minecraft noch lädt, kann
+          die Antwort auf sich warten lassen. Zum Stoppen oder Neustarten die
+          Profilsteuerung verwenden.
+        </p>
+      </form>
+      <form
+        className="console-operator-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (validPlayer) send(`op ${player.trim()}`, "operator");
+        }}
+      >
+        <div className="console-operator-title">
+          <ShieldCheck size={18} />
+          <div>
+            <strong>Spieler zum Operator machen</strong>
+            <p>Vergibt Administratorrechte in diesem Minecraft-Spielstand.</p>
+          </div>
+        </div>
+        <label htmlFor="minecraft-operator-name">Minecraft-Spielername</label>
+        <div className="console-input-row console-operator-row">
+          <input
+            id="minecraft-operator-name"
+            value={player}
+            onChange={(event) => setPlayer(event.target.value)}
+            minLength={3}
+            maxLength={16}
+            pattern="[A-Za-z0-9_]{3,16}"
+            required
+            disabled={unavailable || sending}
+            autoComplete="off"
+            autoCapitalize="none"
+            spellCheck={false}
+            placeholder="DeinSpielername"
+            aria-describedby="minecraft-operator-help"
+          />
+          <button
+            className="button primary-soft"
+            type="submit"
+            disabled={unavailable || sending || !validPlayer}
+          >
+            <ShieldCheck size={15} />
+            Operator hinzufügen
+          </button>
+        </div>
+        <p className="console-help" id="minecraft-operator-help">
+          Java-Spielername mit 3–16 Buchstaben, Zahlen oder Unterstrichen. Die
+          Rückmeldung erscheint oben in der Konsole.
+        </p>
+      </form>
     </div>
   );
 }
@@ -1727,7 +1972,7 @@ function CreateProfile({ catalog, host, initialGameId, onClose, onCreated }) {
       ...previous,
       loader,
       memoryMb:
-        loader === "ftb" ? Math.min(10240, memoryMax) : previous.memoryMb,
+        loader === "ftb" ? Math.min(12288, memoryMax) : previous.memoryMb,
     }));
   };
   const selectGame = (next) => {
@@ -2029,8 +2274,9 @@ function CreateProfile({ catalog, host, initialGameId, onClose, onCreated }) {
                               {selectedVersion.recommendedMemoryMb
                                 ? ` · FTB empfiehlt ${ram(selectedVersion.recommendedMemoryMb)} Java-RAM.`
                                 : "."}{" "}
-                              Für das Profil zusätzlich 768 MB Prozessreserve
-                              einplanen.
+                              Der Profil-RAM umfasst Java-Heap und native
+                              Laufzeit. Mindestens 2 GB bleiben außerhalb des
+                              Heaps.
                             </small>
                           )}
                         </label>
@@ -2165,6 +2411,14 @@ function CreateProfile({ catalog, host, initialGameId, onClose, onCreated }) {
                 <span>{ram(memoryReserve)} bleiben für System &amp; Panel</span>
                 <span>{ram(memoryMax)}</span>
               </div>
+              {ftb && (
+                <p className="resource-note">
+                  Neue FTB-Profile erhalten standardmäßig{" "}
+                  {ram(Math.min(12288, memoryMax))} Profil-RAM. Der Java-Heap
+                  berücksichtigt die Empfehlung des Modpacks; zusätzlicher RAM
+                  bleibt für native Speicherbereiche und den Startvorgang frei.
+                </p>
+              )}
             </div>
             <div className="form-row">
               <label>

@@ -10,13 +10,13 @@ import { parseCollection, profileSchema, providers } from '../server/catalog.mjs
 import { buildDefinition, javaVersion } from '../server/templates.mjs';
 import { openStore } from '../server/store.mjs';
 import { Controller } from '../server/controller.mjs';
+import { listenFixture } from './http-fixture.mjs';
 
 async function fixture(t, extra = {}) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'gameswitch-test-'));
   const config = readConfig({ DATA_DIR: directory, PORT: '3001' });
   const instance = await createApp({ config, ...extra, ...(extra.makeRuntime ? { runtime: extra.makeRuntime(config) } : {}) });
-  const server = instance.app.listen(0, '127.0.0.1');
-  await new Promise(resolve => server.once('listening', resolve));
+  const server = await listenFixture(instance.app);
   config.port = server.address().port;
   config.origin = `http://127.0.0.1:${config.port}`;
   let cookie = ''; let csrf = '';
@@ -268,7 +268,7 @@ test('FTB profiles pin exact IDs and validate version, Java metadata and heap re
   assert.equal((await f.request('/api/catalog/ftb?q=Evolution')).payload.hits[0].id, '135');
   assert.equal((await f.request('/api/catalog/ftb/135/versions')).payload.versions[0].id, '100614');
   const ftb = { ...profile('FTB Evolution 2'), loader: 'ftb', version: '26.1.2', modpackId: '135', modpackVersion: '100614', memoryMb: 10240 };
-  for (const invalid of [{ ...ftb, version: '1.21.4' }, { ...ftb, memoryMb: 6144 }, { ...ftb, modpackId: 'url-not-numeric' }, { ...ftb, modpackVersion: '100613' }, { ...ftb, javaVersion: 8 }]) assert.equal((await f.request('/api/profiles', 'POST', invalid)).status, 400);
+  for (const invalid of [{ ...ftb, version: '1.21.4' }, { ...ftb, memoryMb: 6144 }, { ...ftb, memoryMb: 7680 }, { ...ftb, modpackId: 'url-not-numeric' }, { ...ftb, modpackVersion: '100613' }, { ...ftb, javaVersion: 8 }]) assert.equal((await f.request('/api/profiles', 'POST', invalid)).status, 400);
   const created = await f.request('/api/profiles', 'POST', ftb);
   assert.equal(created.status, 201);
   assert.equal(created.payload.profile.modpackName, 'FTB Evolution 2');
@@ -281,7 +281,9 @@ test('FTB profiles pin exact IDs and validate version, Java metadata and heap re
   assert.equal(definition.run.environmentVars.FTB_MODPACK_ID, '135');
   assert.equal(definition.run.environmentVars.FTB_MODPACK_VERSION_ID, '100614');
   assert.equal(definition.run.environmentVars.FTB_BASE_URL, 'https://api.feed-the-beast.com/v1/modpacks');
-  assert.equal(definition.run.environmentVars.MEMORY, '9472M');
+  assert.equal(definition.run.environmentVars.MEMORY, '8192M');
+  assert.equal(definition.run.environmentVars.MAX_MEMORY, '8192M');
+  assert.equal(definition.run.environmentVars.INIT_MEMORY, '2048M');
   assert.equal(definition.run.environmentVars.VERSION, undefined);
   assert.equal(definition.run.autorestart, false);
 });

@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { ftbEnvironment } from './minecraft-memory.mjs';
 
 const minecraft = JSON.parse(fs.readFileSync(new URL('./templates/minecraft.json', import.meta.url), 'utf8'));
 const gmod = JSON.parse(fs.readFileSync(new URL('./templates/gmod.json', import.meta.url), 'utf8'));
@@ -32,7 +33,7 @@ export function buildDefinition(profile, config) {
       data: { port: { type: 'integer', value: profile.port, required: true, userEdit: false } },
       install: [], uninstall: [],
       run: { command: '/start', stop: 'stop', stdin: { type: 'stdin' }, autostart: false, autorecover: false, autorestart: false,
-        environmentVars: { EULA: 'TRUE', ...(ftb ? { TYPE: 'FTBA', FTB_MODPACK_ID: profile.modpackId, FTB_MODPACK_VERSION_ID: profile.modpackVersion, FTB_BASE_URL: 'https://api.feed-the-beast.com/v1/modpacks', FTB_FORCE_REINSTALL: 'FALSE' } : { TYPE: 'MODRINTH', MODRINTH_MODPACK: profile.modpackId, MODRINTH_VERSION: profile.modpackVersion, VERSION: profile.version }), SERVER_PORT: String(profile.port), MEMORY: `${Math.max(512, profile.memoryMb - 768)}M`, MAX_PLAYERS: String(profile.maxPlayers), ONLINE_MODE: 'TRUE', ENABLE_RCON: 'FALSE', UID: String(config.gameUid), GID: String(config.gameGid) } },
+        environmentVars: { EULA: 'TRUE', ...(ftb ? { TYPE: 'FTBA', FTB_MODPACK_ID: profile.modpackId, FTB_MODPACK_VERSION_ID: profile.modpackVersion, FTB_BASE_URL: 'https://api.feed-the-beast.com/v1/modpacks', FTB_FORCE_REINSTALL: 'FALSE' } : { TYPE: 'MODRINTH', MODRINTH_MODPACK: profile.modpackId, MODRINTH_VERSION: profile.modpackVersion, VERSION: profile.version }), SERVER_PORT: String(profile.port), MEMORY: `${Math.max(512, profile.memoryMb - 768)}M`, ...(ftb ? ftbEnvironment(profile) : {}), MAX_PLAYERS: String(profile.maxPlayers), ONLINE_MODE: 'TRUE', ENABLE_RCON: 'FALSE', UID: String(config.gameUid), GID: String(config.gameGid) } },
       environment: docker(profile, config, `itzg/minecraft-server:java${java}`, '/data'),
       requirements: { os: 'linux', arch: 'amd64' },
     };

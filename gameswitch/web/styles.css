@@ -2296,6 +2296,109 @@ input[type="range"]::-webkit-slider-thumb {
     Consolas,
     monospace;
 }
+.console-controls {
+  padding: 20px 24px;
+  background: #111923;
+  border-top: 1px solid #263646;
+}
+.resource-note {
+  color: #8295a9;
+  font-size: 10px;
+  line-height: 1.8;
+  margin-top: 10px;
+}
+.console-controls .alert {
+  margin-bottom: 16px;
+  font-size: 10px;
+}
+.console-controls label {
+  display: block;
+  margin-bottom: 8px;
+  color: #c9d5e2;
+  font-size: 11px;
+  font-weight: 600;
+}
+.console-input-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+.console-input-row input {
+  flex: 1;
+  min-width: 0;
+  font-family: "Cascadia Code", Consolas, monospace;
+}
+.console-input-row .button {
+  flex-shrink: 0;
+}
+.console-prompt {
+  color: #85d6b4;
+  font:
+    17px "Cascadia Code",
+    Consolas,
+    monospace;
+}
+.console-help {
+  color: #8295a9;
+  font-size: 10px;
+  line-height: 1.8;
+  margin-top: 9px;
+}
+.console-help code {
+  color: #b4d3c6;
+}
+.console-disabled {
+  color: #d2bc8e;
+  margin: 0 0 14px;
+}
+.console-operator-form {
+  margin-top: 19px;
+  padding-top: 18px;
+  border-top: 1px solid #283341;
+}
+.console-operator-title {
+  display: flex;
+  gap: 9px;
+  color: #9ed9bc;
+  margin-bottom: 14px;
+}
+.console-operator-title > svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.console-operator-title strong {
+  font-size: 11px;
+  color: #c9dfd3;
+}
+.console-operator-title p {
+  margin-top: 4px;
+  color: #8295a9;
+  font-size: 10px;
+  line-height: 1.7;
+}
+@media (max-width: 560px) {
+  .console-controls {
+    padding: 17px 16px;
+  }
+  .console-input-row {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .console-input-row input {
+    flex-basis: calc(100% - 25px);
+  }
+  .console-input-row .button {
+    margin-left: 16px;
+    width: calc(100% - 16px);
+  }
+  .console-operator-row input,
+  .console-operator-row .button {
+    flex-basis: 100%;
+    margin-left: 0;
+    width: 100%;
+  }
+}
 .auth-shell {
   min-height: 100vh;
   display: grid;

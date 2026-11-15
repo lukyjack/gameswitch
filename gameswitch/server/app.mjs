@@ -10,6 +10,8 @@ import { openStore } from './store.mjs';
 import { catalog, profileSchema, parseCollection, providers } from './catalog.mjs';
 import { SandboxRuntime, PufferRuntime } from './runtime.mjs';
 import { Controller } from './controller.mjs';
+import { consoleCommandSchema, safeCommandVerb } from './console-command.mjs';
+import { FTB_NATIVE_RESERVE_MB } from './minecraft-memory.mjs';
 
 const token = () => randomBytes(32).toString('base64url');
 const digest = value => createHash('sha256').update(value).digest('hex');
@@ -40,6 +42,7 @@ export async function createApp(options = {}) {
   app.use(express.json({ limit: '16kb', strict: true }));
   app.use('/api', rateLimit({ windowMs: 60000, limit: 240, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'Zu viele Anfragen. Bitte kurz warten.' } }));
   const authLimit = rateLimit({ windowMs: 15 * 60000, limit: 12, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'Zu viele Anmeldeversuche. Bitte 15 Minuten warten.' } });
+  const consoleLimit = rateLimit({ windowMs: 60000, limit: 30, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'Zu viele Konsolenbefehle. Bitte kurz warten.' } });
   const getSession = req => {
     const cookie = (req.headers.cookie || '').split(';').map(part => part.trim()).find(part => part.startsWith('gameswitch_session='));
     const raw = cookie?.slice('gameswitch_session='.length);
@@ -118,7 +121,7 @@ export async function createApp(options = {}) {
       if (!available.versions.some(version => version.id === input.modpackVersion)) return res.status(400).json({ error: 'FTB-Version ist nicht als öffentliche Veröffentlichung verfügbar.' });
       const selected = await catalogProvider.ftbVersion(input.modpackId, input.modpackVersion);
       if (!selected.gameVersions.includes(input.version)) return res.status(400).json({ error: 'FTB-Pack-Version passt nicht zur Minecraft-Version.' });
-      if (selected.minimumMemoryMb && input.memoryMb - 768 < selected.minimumMemoryMb) return res.status(400).json({ error: `FTB benötigt mindestens ${selected.minimumMemoryMb} MB Java-RAM; inklusive Prozessreserve mindestens ${selected.minimumMemoryMb + 768} MB Profil-RAM wählen.` });
+      if (selected.minimumMemoryMb && input.memoryMb - FTB_NATIVE_RESERVE_MB < selected.minimumMemoryMb) return res.status(400).json({ error: `FTB benötigt mindestens ${selected.minimumMemoryMb} MB Java-RAM; inklusive nativer Reserve mindestens ${selected.minimumMemoryMb + FTB_NATIVE_RESERVE_MB} MB Profil-RAM wählen.` });
       input.modpackName = available.pack.name;
       input.modpackVersionName = selected.name;
       input.javaVersion = selected.javaVersion;
@@ -137,6 +140,29 @@ export async function createApp(options = {}) {
     try { res.status(202).json({ job: controller.begin('restore', backup.profileId, backup.id) }); } catch (error) { next(error); }
   });
   app.get('/api/profiles/:id/console', asyncRoute(async (req, res) => res.json({ lines: await runtime.console(controller.profile(req.params.id)) })));
+  app.post('/api/profiles/:id/console', consoleLimit, asyncRoute(async (req, res) => {
+    if (!store.healthy) return res.status(503).json({ error: 'Persistenzfehler. Konsoleneingabe ist bis zur Behebung gesperrt.' });
+    if (controller.busy) return res.status(409).json({ error: 'Eine Serveraktion läuft bereits. Bitte kurz warten.' });
+    const profile = controller.profile(req.params.id);
+    if (profile.gameId !== 'minecraft') return res.status(400).json({ error: 'Konsoleneingaben sind derzeit für Minecraft verfügbar.' });
+    const { command } = consoleCommandSchema.parse(req.body);
+    // Reserve the same gate as start/stop/restore before awaiting any runtime I/O.
+    controller.busy = true;
+    try {
+      // Persist only the command verb before dispatch; arguments may contain private messages or secrets.
+      store.event(`Konsolenbefehl „${safeCommandVerb(command)}“ für „${profile.name}“ von ${req.session.username} angefordert.`);
+      await store.save();
+      try {
+        await runtime.command(profile, command);
+      } catch (error) {
+        if (error.code === 'CONSOLE_DELIVERY_UNCERTAIN') return res.status(502).json({ error: 'Die Bestätigung fehlt. Der Befehl kann bereits ausgeführt worden sein. Bitte die Konsole prüfen; es wird nicht automatisch erneut gesendet.' });
+        throw error;
+      }
+      res.json({ ok: true });
+    } finally {
+      controller.busy = false;
+    }
+  }));
   app.get('/api/catalog/modpacks', asyncRoute(async (req, res) => res.json(await catalogProvider.search(z.string().max(100).parse(req.query.q || '')))));
   app.get('/api/catalog/modpacks/:id/versions', asyncRoute(async (req, res) => res.json(await catalogProvider.versions(req.params.id))));
   app.get('/api/catalog/minecraft-versions', asyncRoute(async (req, res) => res.json(await catalogProvider.minecraft())));
