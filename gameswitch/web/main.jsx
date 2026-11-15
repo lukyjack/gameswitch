@@ -1717,14 +1717,16 @@ function JobProgress({ job, profiles }) {
                 ? "Vorgang sicher angehalten."
                 : job.type === "restart"
                   ? "Serverprozess neu gestartet."
-                  : "Alles bereit."}
+                  : job.type === "activate"
+                    ? "Serverprozess gestartet."
+                    : "Vorgang abgeschlossen."}
           </h3>
           <p>
             {profile?.name || "Servervorgang"}
             {job.status === "failed"
               ? ` · ${job.error || "Bitte das Protokoll prüfen."}`
               : job.status === "completed"
-                ? job.type === "restart"
+                ? ["restart", "activate"].includes(job.type)
                   ? " · Die Welt kann noch laden; die Konsole zeigt den Fortschritt."
                   : " · Vorgang abgeschlossen"
                 : " · Du kannst den Fortschritt hier verfolgen."}
