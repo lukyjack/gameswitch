@@ -44,14 +44,14 @@ test('console validation accepts Minecraft syntax and rejects multiline/control/
   assert.equal(consoleCommandSchema.safeParse({ command: 'list', url: 'http://localhost' }).success, false);
 });
 
-test('console API inherits login/CSRF/origin protection and rejects stopped or non-Minecraft profiles', async t => {
+test('console API inherits login/CSRF/origin protection and rejects stopped profiles', async t => {
   const f = await fixture(t);
   const route = `/api/profiles/${f.minecraft.id}/console`;
   assert.equal((await f.request(route, { command: 'list' })).status, 401);
   await f.setup();
   assert.equal((await f.request(route, { command: 'list' }, { 'X-CSRF-Token': '' })).status, 403);
   assert.equal((await f.request(route, { command: 'list' }, { Origin: 'https://untrusted.example' })).status, 403);
-  assert.equal((await f.request(`/api/profiles/${f.gmod.id}/console`, { command: 'list' })).status, 400);
+  assert.equal((await f.request(`/api/profiles/${f.gmod.id}/console`, { command: 'status' })).status, 409);
   assert.equal((await f.request(route, { command: 'list' })).status, 409);
   assert.equal((await f.request(route, { command: 'stop' })).status, 400);
 });

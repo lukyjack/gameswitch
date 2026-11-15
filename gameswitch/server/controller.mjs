@@ -1,7 +1,16 @@
 import { randomUUID } from 'node:crypto';
+import { createDiagnostics, friendlyDiagnosticMessage, validCorrelationId } from './diagnostics.mjs';
+const quietDiagnostics = createDiagnostics({ write: () => {} });
 
 export class Controller {
-  constructor(store, runtime) { this.store = store; this.runtime = runtime; this.busy = false; this.pending = null; }
+  constructor(store, runtime, diagnostics = quietDiagnostics) { this.store = store; this.runtime = runtime; this.diagnostics = diagnostics; this.busy = false; this.pending = null; }
+  recordFailure(error, job, profile, stage) {
+    let id;
+    try { id = this.diagnostics.error(error, { requestId: job.requestId, jobId: job.id, profileId: profile.id, sourceProfileId: this.store.state.pendingSafetyBackupProfileId, gameId: profile.gameId, type: job.type, operation: job.type, status: 'failed', stage }); } catch { /* An injected logger must also fail soft. */ }
+    if (!validCorrelationId(id)) id = randomUUID();
+    job.errorId = id;
+    job.error = `${friendlyDiagnosticMessage(error)} Fehler-ID: ${id}`;
+  }
   profile(id) {
     const profile = this.store.state.profiles.find(profile => profile.id === id);
     if (!profile) { const error = new Error('Profil nicht gefunden.'); error.status = 404; throw error; }
@@ -20,7 +29,7 @@ export class Controller {
     if (running.length > 1) throw new Error('Mehrere Instanzen laufen außerhalb von GameSwitch. Bitte zuerst in PufferPanel stoppen.');
     return running[0];
   }
-  begin(type, profileId, backupId) {
+  begin(type, profileId, backupId, context = {}) {
     if (!this.store.healthy) { const error = new Error('Persistenzfehler: Aktionen sind bis zum Dienstneustart gesperrt.'); error.status = 503; throw error; }
     if (this.busy) { const error = new Error('Eine Serveraktion läuft bereits.'); error.status = 409; throw error; }
     const profile = this.profile(profileId);
@@ -29,11 +38,13 @@ export class Controller {
       : type === 'restore' ? ['Laufzeit prüfen', 'Sicherheitskopie erstellen', 'Sicherung wiederherstellen']
       : type === 'backup' ? ['Laufzeit prüfen', 'Sicherung abschließen'] : ['Laufzeit prüfen', 'Spielstand speichern', 'Instanz stoppen'];
     const job = { id: randomUUID(), type, status: 'running', profileId, createdAt: new Date().toISOString(), steps: labels.map(label => ({ label, status: 'pending' })) };
+    if (validCorrelationId(context.requestId)) job.requestId = context.requestId;
     this.busy = true;
     this.store.state.job = job;
-    this.pending = new Promise(resolve => setImmediate(resolve)).then(() => this.run(job, profile, backupId)).catch(() => {
+    this.pending = new Promise(resolve => setImmediate(resolve)).then(() => this.run(job, profile, backupId)).catch(error => {
       // A persistence failure is terminal for mutations until restart. Never continue with unrecorded lifecycle state.
-      this.store.healthy = false; job.status = 'failed'; job.error = 'Persistenzfehler. Alle weiteren Aktionen sind gesperrt; Datenträger prüfen und Dienst neu starten.';
+      this.store.healthy = false; job.status = 'failed';
+      this.recordFailure(Object.assign(new Error('Persistenzfehler'), { diagnosticReason: 'persistence_failed', code: error?.code }), job, profile, 'persistence');
     }).finally(() => { this.busy = false; });
     return job;
   }
@@ -58,6 +69,7 @@ export class Controller {
       if (job.type === 'activate') {
         if (this.store.state.recoveryRequiredProfileIds.includes(profile.id)) throw new Error('Unvollständige Wiederherstellung: Dieses Profil muss zuerst erfolgreich aus einer Sicherung wiederhergestellt werden.');
         if (current?.id === profile.id) throw new Error('Dieses Profil läuft bereits.');
+        await this.runtime.preflight?.(profile);
         const pending = this.store.state.pendingSafetyBackupProfileId ? this.profile(this.store.state.pendingSafetyBackupProfileId) : null;
         if (pending && current && pending.id !== current.id) throw new Error('Ausstehende Sicherung zuerst für das vorherige Profil abschließen.');
         const source = current || pending;
@@ -76,6 +88,7 @@ export class Controller {
         if (this.store.state.recoveryRequiredProfileIds.includes(profile.id)) throw new Error('Unvollständige Wiederherstellung: Dieses Profil muss zuerst erfolgreich aus einer Sicherung wiederhergestellt werden.');
         if (current?.id !== profile.id) throw new Error('Nur das aktuell laufende Profil kann neu gestartet werden.');
         if (this.store.state.pendingSafetyBackupProfileId && this.store.state.pendingSafetyBackupProfileId !== profile.id) throw new Error('Ausstehende Sicherung zuerst für das vorherige Profil abschließen.');
+        await this.runtime.preflight?.(profile);
         // Record the safety obligation before save/stop. A crash or failed backup
         // must not let a later activate request silently skip this snapshot.
         this.store.state.pendingSafetyBackupProfileId = profile.id;
@@ -119,7 +132,9 @@ export class Controller {
       }
       job.status = 'completed'; this.store.event(`${job.type === 'activate' ? 'Profilwechsel' : job.type === 'restart' ? 'Serverneustart' : job.type === 'stop' ? 'Serverstopp' : job.type === 'restore' ? 'Wiederherstellung' : 'Sicherung'} für „${profile.name}“ abgeschlossen.`);
     } catch (error) {
-      job.status = 'failed'; job.error = error.message || 'Aktion fehlgeschlagen.';
+      job.status = 'failed';
+      const stage = job.steps.find(step => step.status === 'failed' || step.status === 'running')?.label || 'Laufzeit prüfen';
+      this.recordFailure(error, job, profile, stage);
       this.store.event(job.error, 'error');
       // Never roll back by blindly starting the old server: target could have started before a timeout.
       try { await this.reconcile(); } catch { this.store.state.activeProfileId = null; }

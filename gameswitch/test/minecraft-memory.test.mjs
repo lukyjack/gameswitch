@@ -22,7 +22,7 @@ test('resource reconciliation refuses to touch an already running FTB process', 
     if (url.endsWith('/oauth2/token')) return Response.json({ access_token: 'fixture' });
     return Response.json({ gameswitchVersion: 1, running: true });
   });
-  await assert.rejects(runtime.start({ gameId: 'minecraft', loader: 'ftb', serverId: 'ftb-fixture', memoryMb: 12288 }), error => error.status === 409);
+  await assert.rejects(runtime.start({ gameId: 'minecraft', loader: 'ftb', serverId: 'ftb-fixture', port: 25565, memoryMb: 12288 }), error => error.status === 409);
   assert.ok(calls.every(call => !call.url.endsWith('/definition') && !call.url.includes('/start') && !call.url.includes('/stop')));
 });
 
@@ -34,7 +34,7 @@ test('a legacy FTB profile with insufficient native reserve fails before configu
     if (url.endsWith('/status')) return Response.json({ gameswitchVersion: 1, running: false });
     return Response.json({ run: { environmentVars: { MEMORY: '6400M' } } });
   });
-  await assert.rejects(runtime.start({ gameId: 'minecraft', loader: 'ftb', serverId: 'legacy-fixture', memoryMb: 7168, minimumMemoryMb: 6144 }), error => error.status === 400 && /8192 MB/.test(error.message));
+  await assert.rejects(runtime.start({ gameId: 'minecraft', loader: 'ftb', serverId: 'legacy-fixture', port: 25565, memoryMb: 7168, minimumMemoryMb: 6144 }), error => error.status === 400 && /8192 MB/.test(error.message));
   assert.ok(calls.every(call => call.method !== 'PUT' && !call.url.includes('/start') && !call.url.includes('/stop')));
 });
 
@@ -52,7 +52,7 @@ test('the next stopped FTB start updates only resource settings and preserves pa
     if (url.includes('/start?')) running = true;
     return new Response(null, { status: 204 });
   });
-  await runtime.start({ gameId: 'minecraft', loader: 'ftb', serverId: 'ftb-fixture', memoryMb: 12288, recommendedMemoryMb: 8192 });
+  await runtime.start({ gameId: 'minecraft', loader: 'ftb', serverId: 'ftb-fixture', port: 25565, memoryMb: 12288, recommendedMemoryMb: 8192 });
   const definition = JSON.parse(calls.find(call => call.url.endsWith('/definition') && call.method === 'PUT').body);
   assert.equal(definition.environment.hostConfig.Memory, 12 * 1024 ** 3);
   assert.equal(definition.environment.hostConfig.NanoCpus, 8_000_000_000);

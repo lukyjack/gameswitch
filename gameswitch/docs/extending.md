@@ -2,13 +2,15 @@
 
 Neue Spiele sind eine Codeänderung durch den Administrator. Die Weboberfläche akzeptiert absichtlich keine beliebigen ausführbaren Templates.
 
-1. Die offizielle oder gründlich geprüfte PufferPanel-Definition mit Quellcommit und Lizenz unter `server/templates/` ablegen. Dort liegt auch eine Valheim-Vorlage als Ausgangspunkt; Valheim ist noch kein freigeschaltetes Spiel.
+1. Die offizielle oder gründlich geprüfte PufferPanel-Definition mit Quellcommit und Lizenz unter `server/templates/` ablegen oder eine feste Definition in `server/templates.mjs` ergänzen. Die verwendeten Definitionen für Valheim, Terraria und Factorio sind dort implementiert; eine unbearbeitete Upstream-Vorlage allein schaltet kein Spiel frei.
 2. Unter `server/catalog.mjs` den Katalogeintrag und die Eingabevalidierung erweitern. Nur benötigte Felder erlauben; Dateipfade, ausführbare Befehle und fremde Download-URLs bleiben gesperrt.
 3. Unter `server/templates.mjs` die Definition erzeugen. Installations-/Startbefehle sind fest im Code. Docker-Isolation und Ressourcenlimits beibehalten; keine Autostart-/Autorestart-Aktionen außerhalb des Orchestrators. Spielstand, Ports, Stop-Verhalten und Bereitschaftssignal explizit festlegen.
-4. Benötigte Spieleingaben in `web/` ergänzen. Eine Bibliothekskachel allein gilt nicht als Unterstützung. Falls zusätzliche Geheimnisse nötig sind, diese nur serverseitig konfigurieren.
+4. Benötigte Spieleingaben in `web/` ergänzen. Eine Bibliothekskachel allein gilt nicht als Unterstützung. Geheimnisse über `server/profile-secrets.mjs` getrennt speichern und nur Setzkennzeichen zurückgeben; öffentliche Profilfelder explizit freigeben. Alle zusätzlichen Ports unter `server/game-ports.mjs` prüfen.
 5. Adaptertests, erfolgreichen Start, geordnetes Stoppen, Backup, Wiederherstellung und Wechsel auf einem Linux-Testhost nachweisen. Erst danach den Katalogeintrag freischalten.
 
 Die gemeinsame Lebenszyklussteuerung in `server/controller.mjs` und der Laufzeitadapter in `server/runtime.mjs` bleiben die einzigen Wege zum Starten und Stoppen. Ein neues Spiel darf diesen Pfad nicht umgehen.
+
+Laufzeitfehler über `server/diagnostics.mjs` in vorhandene feste Kategorien einordnen. Zusätzliche Diagnosedaten benötigen eine ausdrückliche Feldfreigabe und passende Tests. Keine rohen Antwortinhalte, Zugangsdaten, Spielereingaben oder frei gelieferten Meldungen in Jobs, API-Serverfehler oder Diagnoselogs übernehmen; Anfrage- und Fehler-IDs zur Zuordnung erhalten.
 
 ## Minecraft-Anbieter
 
@@ -24,4 +26,24 @@ GMod nutzt die eigene öffentliche oder ungelistete Workshop-Collection. Die ID 
 
 Der Server lädt und mountet die Collection. Je nach Addon sind für Client-Inhalte zusätzlich eine Subscription beziehungsweise `resource.AddWorkshop` erforderlich. Eine Spielebibliothek mit beispielsweise Counter-Strike-Source-Assets zu mounten ist ein separater Schritt mit Lizenz-, SteamCMD- und Dateirechteanforderungen und gehört noch nicht zum MVP. Ein gegebenenfalls benötigter Steam Game Server Login Token wird beim Hosting serverseitig ergänzt und gehört nicht in Chat oder Git.
 
-Quellen: [FTB Evolution 2](https://www.feed-the-beast.com/modpacks/135), [FTBA-Laufzeitdokumentation](https://docker-minecraft-server.readthedocs.io/en/latest/types-and-platforms/mod-platforms/ftb/), [GMod Workshop](https://wiki.facepunch.com/gmod/Workshop_for_Dedicated_Servers).
+Der GMod-Adminhelfer setzt ULX und ULib in der Collection voraus. Er übersetzt eine geprüfte SteamID2/SteamID64 in feste `ulx adduserid`-/`ulx removeuserid`-Befehle. Bei neuen Steam-Definitionen ist HOME ein privates Tmpfs; alte `.steam`-Home-Caches werden nur unter den in [security.md](security.md) beschriebenen Stopp- und Strukturprüfungen vorbereitet. Der Archivschutz bleibt streng.
+
+## Weitere freigeschaltete Spiele
+
+| Spiel | Installation und feste Version | Netz und Verwaltung |
+| --- | --- | --- |
+| Valheim | Native Linux-Steam-Laufzeit; Dedicated-Server-App `896660`, aktuelle Steam-Version | UDP Spielport und Spielport + 1; geordnetes Ende per SIGINT. Eigener Weltname, privates Serverpasswort; Ausgabe ohne Befehleingang. Die gestoppte Instanz verwaltet `saves/adminlist.txt` mit `Steam_<ID64>`. |
+| Terraria | Offizielles Paket `terraria-server-1458.zip`, Version 1.4.5.8; Linux-Verzeichnis einschließlich Laufzeitdateien | TCP Spielport, standardmäßig 7777. `save` speichert, `exit` beendet geordnet. Kein eingebauter Minecraft-ähnlicher Operatorrang; Verwaltung über die Konsole. |
+| Factorio | Headless 2.1.24 aus festem Hersteller-Download mit SHA-256-Prüfung | UDP Spielport, standardmäßig 34197. Private IP-Verbindung mit Spielpasswort und aktiver Benutzerverifikation. Konsole `/save World` beziehungsweise `/promote ExactFactorioAccountName`; `/quit` beendet geordnet. |
+
+Valheim speichert Welten und Plattform-Berechtigungslisten im festgelegten Saveverzeichnis. Die [Herstelleranleitung](https://www.valheimgame.com/support/a-guide-to-dedicated-servers/) beschreibt Plattform-IDs, Startbereitschaft und geordnetes Stoppen. Terraria verwendet das [feste Herstellerpaket](https://terraria.org/api/download/pc-dedicated-server/terraria-server-1458.zip); seine [Serverdokumentation](https://terraria.wiki.gg/wiki/Server) erklärt Konfiguration und Befehle.
+
+Factorio verwendet den [Hersteller-Download](https://factorio.com/get-download/2.1.24/headless/linux64) mit dem [offiziellen SHA-256](https://www.factorio.com/download/sha256sums/) `c49b66cff90aceff87b30f2973af0df7f51712cb2ee3153e0169d9bed46a964f`. Aktiviert ist das Basisspiel; Space Age, Quality und Elevated Rails sind in der anfänglichen Modliste deaktiviert. Der Weltstand liegt unter `state/saves/<worldName>.zip`; weitere Zustandsdaten bleiben ebenfalls im Profilverzeichnis. Die Vorlage folgt den [Serverparametern](https://wiki.factorio.com/Command_line_parameters) und der [offiziellen Einstellungsvorlage](https://raw.githubusercontent.com/wube/factorio-data/master/server-settings.example.json). Das Headless-Paket ist kostenlos; ohne öffentliche Auflistung werden keine Serverkonto-Zugangsdaten benötigt. Spieler brauchen passende Clients und Inhalte. [Hersteller-Downloadseite](https://www.factorio.com/download), [Multiplayer](https://wiki.factorio.com/Multiplayer).
+
+## Sichtbare, gesperrte Spiele
+
+Squad besitzt vorbereitete Linux-, Port-, RCON- und Adminlisten-Adapter. Die Installation auf dem Ziel-VPS funktionierte, der native Starttest stürzte beim Kartenladen mit Signal 11 ab; ein OOM wurde dabei nicht bestätigt. Der Katalog bleibt deshalb `available: false`. Unabhängig davon erlaubt Offworld keine Serverlizenz für VPS/VM-Hosting; ein möglicher späterer Betrieb auf diesem Host wäre nur für den Custom Browser vorgesehen. Das ist keine Zusage zur Spielbarkeit oder Leistung. [Offworld-Richtlinie](https://www.joinsquad.com/server-licensing-and-administration-policies).
+
+Farming Simulator 25 bleibt ebenfalls gesperrt: Die Windows-Dedicated-Laufzeit, ein geeigneter Worker und eine eigene gültige Spiellizenz sind nicht eingerichtet. Für Debian wird keine geprüfte native oder Wine-Unterstützung behauptet. Die [Herstellerplattformliste auf Steam](https://store.steampowered.com/app/2300320/Farming_Simulator_25/) enthält kein Linux; GIANTS erläutert die [einzelne Nutzung eines Lizenzschlüssels](https://www.farming-simulator.com/support.php?articleId=54&categoryId=4). Eine spätere Anbindung muss Installation, Aktivierung, Mods, Speichern und Stoppen tatsächlich prüfen.
+
+Weitere Quellen: [FTB Evolution 2](https://www.feed-the-beast.com/modpacks/135), [FTBA-Laufzeitdokumentation](https://docker-minecraft-server.readthedocs.io/en/latest/types-and-platforms/mod-platforms/ftb/), [GMod Workshop](https://wiki.facepunch.com/gmod/Workshop_for_Dedicated_Servers).

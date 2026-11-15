@@ -1111,7 +1111,8 @@ main {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 36px;
 }
-.profile-actions .profile-restart {
+.profile-actions .profile-restart,
+.profile-actions .profile-console {
   grid-column: 1 / -1;
   width: 100%;
 }
@@ -1212,7 +1213,8 @@ main {
   margin-top: 18px;
 }
 .quickstart-options {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
   margin-top: 17px;
 }
@@ -1231,6 +1233,17 @@ main {
 .quickstart-options > button:hover:not(:disabled) {
   background: #202d38;
   border-color: #425b5a;
+}
+.quickstart-options > button.game-library-unavailable:disabled {
+  opacity: 1;
+  background: #17202b;
+  border-color: #3b4552;
+}
+.quickstart-options .game-library-unavailable strong {
+  color: #dce5ef;
+}
+.quickstart-options .game-library-unavailable small {
+  color: #cbbb9e;
 }
 .game-mini {
   height: 35px;
@@ -1270,7 +1283,8 @@ main {
   color: #677d95;
   display: block;
   margin-top: 4px;
-  white-space: nowrap;
+  white-space: normal;
+  line-height: 1.6;
 }
 .quickstart-options > button > svg {
   color: #60748b;
@@ -1983,6 +1997,113 @@ tr:last-child td {
   border-color: #7ab496;
   box-shadow: 0 0 0 1px #7ab496;
 }
+.game-select.unavailable:disabled {
+  opacity: 1;
+  border-color: #45505e;
+}
+.game-select.unavailable h3 {
+  color: #dce5ef;
+}
+.game-select.unavailable p {
+  color: #a7b7c8;
+}
+.game-select.unavailable .select-radio {
+  display: none;
+}
+.game-select.unavailable .game-unavailable-reason {
+  color: #e0cb9d;
+  max-width: none;
+}
+.game-unavailable-reason svg {
+  display: inline;
+  vertical-align: -2px;
+}
+.art-native {
+  background: linear-gradient(135deg, #23394b, #172634 60%, #304750);
+}
+.art-squad {
+  background: linear-gradient(135deg, #47513a, #242f26 60%, #526045);
+}
+.art-valheim {
+  background: linear-gradient(135deg, #28444d, #162f34 60%, #416b68);
+}
+.art-terraria {
+  background: linear-gradient(135deg, #3e5935, #24382b 60%, #4b6745);
+}
+.art-factorio {
+  background: linear-gradient(135deg, #705136, #3b3026 60%, #98633b);
+}
+.art-factorio .native-game-letter {
+  color: #f1c48f;
+}
+.art-fs25 {
+  background: linear-gradient(135deg, #3f4a36, #2a3326 60%, #63734b);
+}
+.native-game-letter {
+  position: absolute;
+  inset: 0 0 20px;
+  display: grid;
+  place-items: center;
+  font-size: 68px;
+  font-weight: 800;
+  letter-spacing: -3px;
+  color: #d4e7dc;
+  text-shadow: 0 5px 30px #0006;
+  opacity: 0.78;
+}
+.art-fs25 .native-game-letter {
+  font-size: 50px;
+}
+.art-native .art-caption strong {
+  font-size: 19px;
+}
+.game-mini-squad.blue,
+.game-mini-fs25.blue {
+  background: #35412e;
+  color: #bfd2a7;
+  border-color: #526145;
+}
+.game-mini-valheim.blue {
+  background: #244247;
+  color: #b7dfd8;
+  border-color: #3d6668;
+}
+.game-mini-terraria.blue {
+  background: #2e4931;
+  color: #b8deb1;
+  border-color: #4b6e4a;
+}
+.game-mini-factorio.blue {
+  background: #513b2b;
+  color: #f1c48f;
+  border-color: #91613e;
+}
+.active-icon.active-icon-factorio {
+  background: #513b2b;
+  color: #f1c48f;
+  border-color: #91613e;
+}
+.game-mini-squad > span,
+.game-mini-fs25 > span {
+  font-size: 13px;
+  transform: none;
+}
+.active-icon .active-game-letter {
+  font-size: 26px;
+  letter-spacing: -1px;
+}
+.game-notice {
+  margin-bottom: 20px;
+  line-height: 1.8;
+  align-items: flex-start;
+}
+.game-notice svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.game-version-note {
+  margin-bottom: 18px;
+}
 .game-select .game-art {
   height: 132px;
 }
@@ -2391,7 +2512,42 @@ input[type="range"]::-webkit-slider-thumb {
   font-size: 10px;
   line-height: 1.7;
 }
+.console-admin-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 14px;
+}
+.console-admin-fields label {
+  min-width: 0;
+}
+.console-admin-footer {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  margin-top: 6px;
+}
+.console-admin-footer .console-help {
+  flex: 1;
+  margin-top: 0;
+}
+.console-admin-footer .button {
+  flex-shrink: 0;
+}
 @media (max-width: 560px) {
+  .quickstart-options {
+    grid-template-columns: 1fr;
+  }
+  .console-admin-fields {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+  .console-admin-footer {
+    flex-direction: column;
+    gap: 10px;
+  }
+  .console-admin-footer .button {
+    width: 100%;
+  }
   .console-controls {
     padding: 17px 16px;
   }

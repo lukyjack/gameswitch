@@ -74,13 +74,56 @@ const navItems = [
   ["backups", Database, "Backups"],
   ["activity", Activity, "Aktivität"],
 ];
-const gameName = (id) =>
-  id === "minecraft"
-    ? "Minecraft"
-    : id === "gmod" || id === "garrysmod"
-      ? "Garry’s Mod"
-      : id;
+const gameNames = {
+  minecraft: "Minecraft",
+  gmod: "Garry’s Mod",
+  garrysmod: "Garry’s Mod",
+  squad: "Squad",
+  valheim: "Valheim",
+  terraria: "Terraria",
+  factorio: "Factorio",
+  fs25: "Farming Simulator 25",
+};
+const gameName = (id) => gameNames[id] || id;
+const gameLetter = (id) =>
+  ({
+    gmod: "g",
+    garrysmod: "g",
+    squad: "SQ",
+    valheim: "V",
+    terraria: "T",
+    factorio: "F",
+    fs25: "FS25",
+  })[id] || "?";
+const defaultGameVersion = (game) =>
+  game?.defaultVersion ||
+  (game?.id === "terraria"
+    ? "1.4.5.8"
+    : game?.id === "factorio"
+      ? "2.1.24"
+      : game?.id === "minecraft"
+        ? ""
+        : "latest");
+const gameCapabilities = (gameId, catalog = []) =>
+  catalog.find((game) => game.id === gameId) || {
+    consoleInput: [
+      "minecraft",
+      "gmod",
+      "terraria",
+      "squad",
+      "factorio",
+    ].includes(gameId),
+    adminKind:
+      {
+        minecraft: "minecraft",
+        gmod: "ulx",
+        valheim: "valheim",
+        squad: "squad",
+      }[gameId] || "none",
+  };
 const isMinecraft = (profile) => profile?.gameId === "minecraft";
+const defaultGamePlayers = (game) =>
+  Math.min(game?.id === "factorio" ? 16 : 20, game?.maxPlayers || 128);
 const date = (value) =>
   value
     ? new Intl.DateTimeFormat("de-DE", {
@@ -101,6 +144,7 @@ const loaderName = (value) =>
     modrinth: "Modrinth",
     ftb: "Feed the Beast",
     steam: "SteamCMD",
+    native: "Nativ",
     default: "Standard",
   })[value] ||
   value ||
@@ -119,9 +163,10 @@ function Mark({ small = false }) {
 
 function GameArt({ game = "minecraft", compact = false }) {
   const minecraft = game === "minecraft";
+  const gmod = ["gmod", "garrysmod"].includes(game);
   return (
     <div
-      className={`game-art ${minecraft ? "art-minecraft" : "art-gmod"} ${compact ? "compact" : ""}`}
+      className={`game-art art-${gmod ? "gmod" : game} ${!minecraft && !gmod ? "art-native" : ""} ${compact ? "compact" : ""}`}
       aria-hidden="true"
     >
       <div className="art-grid" />
@@ -133,21 +178,42 @@ function GameArt({ game = "minecraft", compact = false }) {
           <div className="voxel v-four" />
           <div className="art-sun" />
         </>
-      ) : (
+      ) : gmod ? (
         <>
           <span className="gmod-letter">g</span>
           <div className="orbit orbit-one" />
           <div className="orbit orbit-two" />
           <div className="art-cross">+</div>
         </>
+      ) : (
+        <span className="native-game-letter">{gameLetter(game)}</span>
       )}
       <div className="art-caption">
         <span>
-          {minecraft ? "BUILD SOMETHING GREAT" : "YOUR SANDBOX. YOUR RULES."}
+          {minecraft
+            ? "BUILD SOMETHING GREAT"
+            : gmod
+              ? "YOUR SANDBOX. YOUR RULES."
+              : "DEINE WELT. DEIN SERVER."}
         </span>
-        <strong>{minecraft ? "MINECRAFT" : "GARRY’S MOD"}</strong>
+        <strong>{gameName(game).toUpperCase()}</strong>
       </div>
     </div>
+  );
+}
+
+function GameBadge({ game, size = 21 }) {
+  return (
+    <span
+      className={`game-mini game-mini-${game} ${game === "minecraft" ? "green" : "blue"}`}
+      aria-hidden="true"
+    >
+      {game === "minecraft" ? (
+        <Box size={size} />
+      ) : (
+        <span>{gameLetter(game)}</span>
+      )}
+    </span>
   );
 }
 
@@ -223,7 +289,13 @@ function App() {
     }
   };
   const requestRestart = (profile) => {
-    if (busy || runningJob || profile.status !== "running") return;
+    if (
+      busy ||
+      runningJob ||
+      profile.status !== "running" ||
+      gameCapabilities(profile.gameId, state?.catalog).available === false
+    )
+      return;
     setError("");
     setModal({ type: "restart", profile });
   };
@@ -510,10 +582,12 @@ function App() {
                         </div>
                         <div className="active-content">
                           <div
-                            className={`active-icon ${active && !isMinecraft(active) ? "blue" : ""}`}
+                            className={`active-icon ${active && !isMinecraft(active) ? "blue" : ""} ${active?.gameId === "factorio" ? "active-icon-factorio" : ""}`}
                           >
                             {active && !isMinecraft(active) ? (
-                              <span>g</span>
+                              <span className="active-game-letter">
+                                {gameLetter(active.gameId)}
+                              </span>
                             ) : (
                               <Box size={35} strokeWidth={1.5} />
                             )}
@@ -556,6 +630,8 @@ function App() {
                                 disabled={
                                   busy ||
                                   runningJob ||
+                                  gameCapabilities(active.gameId, state.catalog)
+                                    .available === false ||
                                   active.status !== "running"
                                 }
                                 onClick={() => requestRestart(active)}
@@ -683,6 +759,10 @@ function App() {
                               profile.status === "running"
                             }
                             sandbox={sandbox}
+                            game={gameCapabilities(
+                              profile.gameId,
+                              state.catalog,
+                            )}
                             disabled={busy || runningJob}
                             onActivate={() =>
                               setModal({ type: "activate", profile })
@@ -739,26 +819,28 @@ function App() {
                           {(state.catalog || []).map((game) => (
                             <button
                               key={game.id}
-                              disabled={runningJob}
+                              className={
+                                game.available === false
+                                  ? "game-library-unavailable"
+                                  : undefined
+                              }
+                              disabled={runningJob || game.available === false}
+                              title={
+                                game.unavailableReason ||
+                                game.notice ||
+                                game.description
+                              }
                               onClick={() =>
                                 setModal({ type: "create", gameId: game.id })
                               }
                             >
-                              <span
-                                className={`game-mini ${game.id === "minecraft" ? "green" : "blue"}`}
-                              >
-                                {game.id === "minecraft" ? (
-                                  <Box size={21} />
-                                ) : (
-                                  <span>g</span>
-                                )}
-                              </span>
+                              <GameBadge game={game.id} />
                               <span>
                                 <strong>{game.name}</strong>
                                 <small>
-                                  {game.id === "minecraft"
-                                    ? "Vanilla, Modrinth & Feed the Beast"
-                                    : "Workshop-Collections & Maps"}
+                                  {game.available === false
+                                    ? game.unavailableReason
+                                    : game.description}
                                 </small>
                               </span>
                               <ArrowRight size={17} />
@@ -831,6 +913,11 @@ function App() {
           host={state?.host}
           initialGameId={modal.gameId}
           onClose={() => setModal(null)}
+          onUnauthorized={() => {
+            csrfToken = "";
+            setModal(null);
+            setSession({ authenticated: false });
+          }}
           onCreated={async () => {
             setModal(null);
             setNotice("Spielprofil angelegt. Du kannst es jetzt starten.");
@@ -872,8 +959,9 @@ function App() {
               {sandbox ? "Sandbox-Protokoll" : "Serverausgabe"}
             </span>
             <span>
-              {isMinecraft(consoleProfile)
-                ? "Minecraft-Konsole"
+              {gameCapabilities(consoleProfile.gameId, state.catalog)
+                .consoleInput
+                ? `${gameName(consoleProfile.gameId)}-Konsole`
                 : "Nur Lesezugriff"}
             </span>
           </div>
@@ -882,7 +970,7 @@ function App() {
               ? consoleLines.join("\n")
               : "Noch keine Konsolenausgabe vorhanden."}
           </pre>
-          {isMinecraft(consoleProfile) && (
+          {
             <ConsoleInput
               key={consoleProfile.id}
               profile={
@@ -890,6 +978,7 @@ function App() {
                 consoleProfile
               }
               sandbox={sandbox}
+              game={gameCapabilities(consoleProfile.gameId, state.catalog)}
               locked={runningJob}
               onSent={async () => {
                 try {
@@ -911,13 +1000,11 @@ function App() {
                 setSession({ authenticated: false });
               }}
             />
-          )}
+          }
           <div className="modal-footer">
             <p>
               <LockKeyhole size={14} />
-              {isMinecraft(consoleProfile)
-                ? "Befehle gehen nur an dieses Minecraft-Profil."
-                : "Konsolenausgabe dieses Spielprofils."}
+              Befehle und Rechteverwaltung gelten nur für dieses Spielprofil.
             </p>
             <button
               className="button subtle"
@@ -932,9 +1019,18 @@ function App() {
   );
 }
 
-function ConsoleInput({ profile, sandbox, locked, onSent, onUnauthorized }) {
+function ConsoleInput({
+  profile,
+  game,
+  sandbox,
+  locked,
+  onSent,
+  onUnauthorized,
+}) {
   const [command, setCommand] = useState("");
   const [player, setPlayer] = useState("");
+  const [steamId, setSteamId] = useState("");
+  const [role, setRole] = useState("admin");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -942,11 +1038,20 @@ function ConsoleInput({ profile, sandbox, locked, onSent, onUnauthorized }) {
   const sendingLock = useRef(false);
   const historyPosition = useRef(-1);
   const commandDraft = useRef("");
+  const minecraft = isMinecraft(profile);
+  const canInput = game.consoleInput === true;
+  const adminKind = game.adminKind || "none";
+  const hasSteamAdmin = ["ulx", "valheim", "squad"].includes(adminKind);
+  const fileAdmin = ["valheim", "squad"].includes(adminKind);
   const unavailable = locked || profile.status !== "running";
+  const adminUnavailable =
+    locked ||
+    (fileAdmin ? profile.status !== "stopped" : profile.status !== "running");
   const validPlayer = /^[A-Za-z0-9_]{3,16}$/.test(player.trim());
+  const validSteamId = /^(?:STEAM_[01]:[01]:\d+|\d{17})$/.test(steamId.trim());
 
   const send = async (value, kind) => {
-    if (sendingLock.current || unavailable) return;
+    if (sendingLock.current || unavailable || !canInput) return;
     const submitted = value.trim();
     if (
       !submitted ||
@@ -974,8 +1079,37 @@ function ConsoleInput({ profile, sandbox, locked, onSent, onUnauthorized }) {
       else setCommand("");
       setNotice(
         sandbox
-          ? "Befehl in der Sandbox angenommen. Hier läuft kein Minecraft-Server."
+          ? "Befehl in der Sandbox angenommen. Hier läuft kein echter Spielserver."
           : "Befehl übermittelt. Ob er ausgeführt wurde, siehst du in der Serverausgabe.",
+      );
+      await onSent();
+    } catch (e) {
+      if (e.status === 401) onUnauthorized();
+      else setError(e.message);
+    } finally {
+      sendingLock.current = false;
+      setSending(false);
+    }
+  };
+
+  const updateAdmin = async (event) => {
+    event.preventDefault();
+    if (sendingLock.current || adminUnavailable || !validSteamId) return;
+    sendingLock.current = true;
+    setSending(true);
+    setError("");
+    setNotice("");
+    try {
+      const result = await api(
+        `/profiles/${encodeURIComponent(profile.id)}/admin`,
+        {
+          method: "POST",
+          body: { steamId: steamId.trim(), role },
+        },
+      );
+      setSteamId("");
+      setNotice(
+        `${result.notice || "Anfrage angenommen."}${result.requiresRestart ? " Die Liste gilt beim nächsten Start des Profils." : result.simulated ? " In der Sandbox simuliert." : " Die Serverausgabe zeigt die Rückmeldung."}`,
       );
       await onSent();
     } catch (e) {
@@ -989,11 +1123,11 @@ function ConsoleInput({ profile, sandbox, locked, onSent, onUnauthorized }) {
 
   return (
     <div className="console-controls">
-      {unavailable && (
+      {canInput && unavailable && (
         <p className="console-help console-disabled" role="status">
           {locked
             ? "Während einer Serveraktion ist die Befehlseingabe gesperrt."
-            : "Befehle sind nur für ein laufendes Minecraft-Profil verfügbar."}
+            : "Befehle sind nur für ein laufendes Spielprofil verfügbar."}
         </p>
       )}
       {error && (
@@ -1008,125 +1142,274 @@ function ConsoleInput({ profile, sandbox, locked, onSent, onUnauthorized }) {
           <span>{notice}</span>
         </div>
       )}
-      <form
-        className="console-command-form"
-        onSubmit={(event) => {
-          event.preventDefault();
-          send(command, "command");
-        }}
-      >
-        <label htmlFor="minecraft-console-command">Minecraft-Befehl</label>
-        <div className="console-input-row">
-          <span aria-hidden="true" className="console-prompt">
-            &gt;
-          </span>
-          <input
-            id="minecraft-console-command"
-            value={command}
-            onChange={(event) => {
-              setCommand(event.target.value);
-              historyPosition.current = -1;
-            }}
-            onKeyDown={(event) => {
-              if (
-                !["ArrowUp", "ArrowDown"].includes(event.key) ||
-                !history.current.length
-              )
-                return;
-              event.preventDefault();
-              if (event.key === "ArrowUp") {
-                if (historyPosition.current === -1)
-                  commandDraft.current = command;
-                historyPosition.current = Math.min(
-                  historyPosition.current + 1,
-                  history.current.length - 1,
+      {canInput && (
+        <form
+          className="console-command-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            send(command, "command");
+          }}
+        >
+          <label htmlFor="game-console-command">
+            {gameName(profile.gameId)}-Befehl
+          </label>
+          <div className="console-input-row">
+            <span aria-hidden="true" className="console-prompt">
+              &gt;
+            </span>
+            <input
+              id="game-console-command"
+              value={command}
+              onChange={(event) => {
+                setCommand(event.target.value);
+                historyPosition.current = -1;
+              }}
+              onKeyDown={(event) => {
+                if (
+                  !["ArrowUp", "ArrowDown"].includes(event.key) ||
+                  !history.current.length
+                )
+                  return;
+                event.preventDefault();
+                if (event.key === "ArrowUp") {
+                  if (historyPosition.current === -1)
+                    commandDraft.current = command;
+                  historyPosition.current = Math.min(
+                    historyPosition.current + 1,
+                    history.current.length - 1,
+                  );
+                } else
+                  historyPosition.current = Math.max(
+                    historyPosition.current - 1,
+                    -1,
+                  );
+                setCommand(
+                  historyPosition.current === -1
+                    ? commandDraft.current
+                    : history.current[historyPosition.current],
                 );
-              } else
-                historyPosition.current = Math.max(
-                  historyPosition.current - 1,
-                  -1,
-                );
-              setCommand(
-                historyPosition.current === -1
-                  ? commandDraft.current
-                  : history.current[historyPosition.current],
-              );
-            }}
-            maxLength={1024}
-            required
-            disabled={unavailable || sending}
-            autoComplete="off"
-            autoCapitalize="none"
-            spellCheck={false}
-            placeholder="z. B. op DeinSpielername"
-            aria-describedby="minecraft-console-help"
-          />
-          <button
-            className="button primary"
-            type="submit"
-            disabled={unavailable || sending || !command.trim()}
-          >
-            {sending ? (
-              <LoaderCircle className="spin" size={15} />
-            ) : (
-              <ArrowRight size={15} />
-            )}
-            Senden
-          </button>
-        </div>
-        <p className="console-help" id="minecraft-console-help">
-          Ohne führenden Schrägstrich eingeben und mit Enter senden, z. B.{" "}
-          <code>list</code>, <code>op DeinSpielername</code> oder{" "}
-          <code>deop DeinSpielername</code>. Während Minecraft noch lädt, kann
-          die Antwort auf sich warten lassen. Zum Stoppen oder Neustarten die
-          Profilsteuerung verwenden.
-        </p>
-      </form>
-      <form
-        className="console-operator-form"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (validPlayer) send(`op ${player.trim()}`, "operator");
-        }}
-      >
-        <div className="console-operator-title">
-          <ShieldCheck size={18} />
-          <div>
-            <strong>Spieler zum Operator machen</strong>
-            <p>Vergibt Administratorrechte in diesem Minecraft-Spielstand.</p>
+              }}
+              maxLength={1024}
+              required
+              disabled={unavailable || sending}
+              autoComplete="off"
+              autoCapitalize="none"
+              spellCheck={false}
+              placeholder={
+                minecraft
+                  ? "z. B. op DeinSpielername"
+                  : profile.gameId === "gmod"
+                    ? "z. B. status"
+                    : profile.gameId === "terraria"
+                      ? "z. B. playing"
+                      : profile.gameId === "factorio"
+                        ? "z. B. /promote DeinFactorioSpielername"
+                        : "z. B. ListPlayers"
+              }
+              aria-describedby="game-console-help"
+            />
+            <button
+              className="button primary"
+              type="submit"
+              disabled={unavailable || sending || !command.trim()}
+            >
+              {sending ? (
+                <LoaderCircle className="spin" size={15} />
+              ) : (
+                <ArrowRight size={15} />
+              )}
+              Senden
+            </button>
           </div>
-        </div>
-        <label htmlFor="minecraft-operator-name">Minecraft-Spielername</label>
-        <div className="console-input-row console-operator-row">
-          <input
-            id="minecraft-operator-name"
-            value={player}
-            onChange={(event) => setPlayer(event.target.value)}
-            minLength={3}
-            maxLength={16}
-            pattern="[A-Za-z0-9_]{3,16}"
-            required
-            disabled={unavailable || sending}
-            autoComplete="off"
-            autoCapitalize="none"
-            spellCheck={false}
-            placeholder="DeinSpielername"
-            aria-describedby="minecraft-operator-help"
-          />
-          <button
-            className="button primary-soft"
-            type="submit"
-            disabled={unavailable || sending || !validPlayer}
-          >
-            <ShieldCheck size={15} />
-            Operator hinzufügen
-          </button>
-        </div>
-        <p className="console-help" id="minecraft-operator-help">
-          Java-Spielername mit 3–16 Buchstaben, Zahlen oder Unterstrichen. Die
-          Rückmeldung erscheint oben in der Konsole.
+          <p className="console-help" id="game-console-help">
+            {profile.gameId === "factorio"
+              ? "Factorio-Befehle mit führendem Schrägstrich eingeben und mit Enter senden."
+              : "Ohne führenden Schrägstrich eingeben und mit Enter senden."}
+            {" "}
+            Beispiele:{" "}
+            {minecraft ? (
+              <>
+                <code>list</code>, <code>op DeinSpielername</code>,{" "}
+                <code>deop DeinSpielername</code>
+              </>
+            ) : profile.gameId === "gmod" ? (
+              <>
+                <code>status</code>, <code>ulx help</code> (ULX erforderlich)
+              </>
+            ) : profile.gameId === "terraria" ? (
+              <>
+                <code>help</code>, <code>playing</code>
+              </>
+            ) : profile.gameId === "factorio" ? (
+              <>
+                <code>/promote DeinFactorioSpielername</code>,{" "}
+                <code>/demote DeinFactorioSpielername</code>,{" "}
+                <code>/save {profile.worldName || "World"}</code>, <code>/help</code>
+              </>
+            ) : (
+              <code>ListPlayers</code>
+            )}
+            . Während der Server noch lädt, kann die Antwort auf sich warten
+            lassen. Zum Stoppen oder Neustarten die Profilsteuerung verwenden.
+          </p>
+        </form>
+      )}
+      {minecraft && (
+        <form
+          className="console-operator-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (validPlayer) send(`op ${player.trim()}`, "operator");
+          }}
+        >
+          <div className="console-operator-title">
+            <ShieldCheck size={18} />
+            <div>
+              <strong>Spieler zum Operator machen</strong>
+              <p>Vergibt Administratorrechte in diesem Minecraft-Spielstand.</p>
+            </div>
+          </div>
+          <label htmlFor="minecraft-operator-name">Minecraft-Spielername</label>
+          <div className="console-input-row console-operator-row">
+            <input
+              id="minecraft-operator-name"
+              value={player}
+              onChange={(event) => setPlayer(event.target.value)}
+              minLength={3}
+              maxLength={16}
+              pattern="[A-Za-z0-9_]{3,16}"
+              required
+              disabled={unavailable || sending}
+              autoComplete="off"
+              autoCapitalize="none"
+              spellCheck={false}
+              placeholder="DeinSpielername"
+              aria-describedby="minecraft-operator-help"
+            />
+            <button
+              className="button primary-soft"
+              type="submit"
+              disabled={unavailable || sending || !validPlayer}
+            >
+              <ShieldCheck size={15} />
+              Operator hinzufügen
+            </button>
+          </div>
+          <p className="console-help" id="minecraft-operator-help">
+            Java-Spielername mit 3–16 Buchstaben, Zahlen oder Unterstrichen. Die
+            Rückmeldung erscheint oben in der Konsole.
+          </p>
+        </form>
+      )}
+      {hasSteamAdmin && (
+        <form className="console-operator-form" onSubmit={updateAdmin}>
+          <div className="console-operator-title">
+            <ShieldCheck size={18} />
+            <div>
+              <strong>
+                {adminKind === "ulx"
+                  ? "ULX-Administrator verwalten"
+                  : "Administratorliste verwalten"}
+              </strong>
+              <p>
+                {adminKind === "ulx"
+                  ? "ULX und ULib müssen bereits auf diesem Server geladen sein."
+                  : "Die gespeicherte Administratorliste wird beim nächsten Profilstart verwendet."}
+              </p>
+            </div>
+          </div>
+          {fileAdmin && (
+            <p className="console-help console-disabled" role="status">
+              {profile.status === "stopped"
+                ? "Das Profil ist gestoppt; die Liste kann bearbeitet werden."
+                : "Zum Bearbeiten zuerst das Profil über die Profilsteuerung stoppen."}{" "}
+              Das Hinzufügen oder Entfernen startet den Server nicht.
+            </p>
+          )}
+          <div className="console-admin-fields">
+            <label htmlFor="admin-steam-id">
+              Steam-ID
+              <input
+                id="admin-steam-id"
+                value={steamId}
+                onChange={(event) => setSteamId(event.target.value)}
+                maxLength={40}
+                required
+                pattern="(STEAM_[01]:[01]:[0-9]+|[0-9]{17})"
+                disabled={adminUnavailable || sending}
+                autoComplete="off"
+                autoCapitalize="none"
+                spellCheck={false}
+                placeholder="SteamID64 oder STEAM_0:1:123456"
+                aria-describedby="steam-admin-help"
+              />
+            </label>
+            <label htmlFor="admin-role">
+              Berechtigung
+              <select
+                id="admin-role"
+                value={role}
+                onChange={(event) => setRole(event.target.value)}
+                disabled={adminUnavailable || sending}
+              >
+                <option value="admin">Administrator</option>
+                {adminKind === "ulx" && (
+                  <option value="superadmin">Superadministrator</option>
+                )}
+                <option value="user">Administratorrechte entfernen</option>
+              </select>
+            </label>
+          </div>
+          <div className="console-admin-footer">
+            <p className="console-help" id="steam-admin-help">
+              SteamID64 mit 17 Ziffern oder SteamID2 im Format STEAM_0:1:123456.{" "}
+              {adminKind === "ulx"
+                ? "Die Übermittlung bestätigt noch keine Ausführung; bitte die Rückmeldung in der Serverausgabe prüfen."
+                : "Die Liste verwaltet die Administratorrechte für dieses Spielprofil."}
+            </p>
+            <button
+              className="button primary-soft"
+              type="submit"
+              disabled={adminUnavailable || sending || !validSteamId}
+            >
+              {sending ? (
+                <LoaderCircle className="spin" size={15} />
+              ) : (
+                <ShieldCheck size={15} />
+              )}{" "}
+              {role === "user" ? "Rechte entfernen" : "Rechte speichern"}
+            </button>
+          </div>
+        </form>
+      )}
+      {profile.gameId === "valheim" && (
+        <p className="console-help">
+          Valheim unterstützt hier keine direkte Konsoleneingabe. Die
+          Serverausgabe bleibt lesbar; Administratoren werden über die Liste
+          verwaltet.
         </p>
-      </form>
+      )}
+      {profile.gameId === "terraria" && (
+        <p className="console-help">
+          Der native Terraria-Server hat keine separate Administratorgruppe. Die
+          Serverkonsole steuert die Serverregeln und Spieler direkt.
+        </p>
+      )}
+      {profile.gameId === "factorio" && (
+        <p className="console-help">
+          Administratorrechte werden mit{" "}
+          <code>/promote ExakterFactorioSpielername</code> vergeben und mit{" "}
+          <code>/demote ExakterFactorioSpielername</code> entfernt. Den
+          tatsächlichen Namen des Factorio-Spielkontos exakt übernehmen. Der
+          Beitritt erfolgt per Server-IP und Serverpasswort mit geprüftem
+          Factorio-Konto.
+        </p>
+      )}
+      {!canInput && !hasSteamAdmin && (
+        <p className="console-help">
+          Für dieses Spiel ist hier nur die Serverausgabe verfügbar.
+        </p>
+      )}
     </div>
   );
 }
@@ -1277,6 +1560,7 @@ function Auth({ session, onAuthenticated }) {
 
 function ProfileCard({
   profile,
+  game,
   active,
   sandbox,
   disabled,
@@ -1307,9 +1591,11 @@ function ProfileCard({
           <span>·</span>
           {minecraft
             ? loaderName(profile.loader)
-            : profile.gamemode === "terrortown"
-              ? "Trouble in Terrorist Town"
-              : "Sandbox"}
+            : profile.gameId === "gmod"
+              ? profile.gamemode === "terrortown"
+                ? "Trouble in Terrorist Town"
+                : "Sandbox"
+              : loaderName(profile.loader)}
         </span>
         <h3>{profile.name}</h3>
         <p className="profile-version">
@@ -1317,9 +1603,14 @@ function ProfileCard({
             ? profile.modpackId
               ? `${profile.modpackName || "Modpack"} · ${profile.modpackVersionName || profile.version}`
               : `Minecraft ${profile.version}`
-            : profile.collectionId
-              ? `Collection #${profile.collectionId}`
-              : profile.map || "Sandbox"}
+            : profile.gameId === "gmod"
+              ? profile.collectionId
+                ? `Collection #${profile.collectionId}`
+                : profile.map || "Sandbox"
+              : profile.worldName ||
+                (profile.version === "latest"
+                  ? "Aktuelle Serverversion"
+                  : `Version ${profile.version}`)}
         </p>
         <div className="profile-meta">
           <span>
@@ -1334,12 +1625,15 @@ function ProfileCard({
             <Server size={14} />:{profile.port}
           </span>
         </div>
-        <div
-          className={`profile-actions ${active ? "profile-actions-running" : ""}`}
-        >
+        <div className="profile-actions profile-actions-running">
           <button
             className={`button ${active ? "subtle" : "primary-soft"}`}
-            disabled={disabled || profile.status === "unknown"}
+            disabled={
+              disabled ||
+              profile.status === "unknown" ||
+              game?.available === false
+            }
+            title={game?.unavailableReason}
             onClick={active ? onConsole : onActivate}
           >
             {active ? <Terminal size={15} /> : <Power size={15} />}
@@ -1362,7 +1656,11 @@ function ProfileCard({
           {active && (
             <button
               className="button subtle profile-restart"
-              disabled={disabled || profile.status !== "running"}
+              disabled={
+                disabled ||
+                profile.status !== "running" ||
+                game?.available === false
+              }
               onClick={onRestart}
               aria-label={`${profile.name} neu starten`}
             >
@@ -1370,7 +1668,21 @@ function ProfileCard({
               Neu starten
             </button>
           )}
+          {!active && (
+            <button
+              className="button subtle profile-console"
+              disabled={disabled}
+              onClick={onConsole}
+              aria-label={`Konsole und Administration für ${profile.name} öffnen`}
+            >
+              <Terminal size={15} />
+              Konsole &amp; Admin
+            </button>
+          )}
         </div>
+        {game?.available === false && (
+          <p className="console-help">{game.unavailableReason}</p>
+        )}
       </div>
     </article>
   );
@@ -1956,23 +2268,45 @@ function ConfirmModal({
   );
 }
 
-function CreateProfile({ catalog, host, initialGameId, onClose, onCreated }) {
-  const initial = catalog.find((g) => g.id === initialGameId) || catalog[0];
-  const [step, setStep] = useState(initialGameId ? 2 : 1);
+function CreateProfile({
+  catalog,
+  host,
+  initialGameId,
+  onClose,
+  onCreated,
+  onUnauthorized,
+}) {
+  const initial =
+    catalog.find((g) => g.id === initialGameId && g.available !== false) ||
+    catalog.find((g) => g.available !== false) ||
+    catalog[0];
+  const [step, setStep] = useState(
+    initialGameId && initial?.id === initialGameId ? 2 : 1,
+  );
   const [game, setGame] = useState(initial);
   const [form, setForm] = useState({
     name: "",
     loader: initial?.loaders?.[0] || "vanilla",
-    version: "",
-    memoryMb: initial?.defaultMemoryMb || 4096,
+    version: defaultGameVersion(initial),
+    memoryMb: Math.min(
+      initial?.defaultMemoryMb || 4096,
+      Math.min(
+        13312,
+        (host?.memoryMb || 16384) - (host?.reservedMemoryMb || 3072),
+      ),
+    ),
     port: initial?.defaultPort || 25565,
-    maxPlayers: 20,
+    maxPlayers: defaultGamePlayers(initial),
     collectionId: "",
     gamemode: "sandbox",
     map: "gm_construct",
     eulaAccepted: false,
     modpackId: "",
     modpackVersion: "",
+    serverPassword: "",
+    worldName: "",
+    queryPort: initial?.defaultQueryPort || 27165,
+    beaconPort: initial?.defaultBeaconPort || 15000,
   });
   const [versions, setVersions] = useState([]);
   const [packQuery, setPackQuery] = useState("");
@@ -1985,13 +2319,15 @@ function CreateProfile({ catalog, host, initialGameId, onClose, onCreated }) {
   const providerGeneration = useRef(0);
   const versionGeneration = useRef(0);
   const versionAbort = useRef(null);
+  const submitLock = useRef(false);
   const minecraft = game?.kind === "minecraft" || game?.id === "minecraft";
   const memoryMax = Math.min(
     13312,
     (host?.memoryMb || 16384) - (host?.reservedMemoryMb || 3072),
   );
   const memoryReserve = host?.reservedMemoryMb || 3072;
-  const modpack = ["modrinth", "ftb"].includes(form.loader);
+  const memoryMin = game?.minMemoryMb || 1024;
+  const modpack = minecraft && ["modrinth", "ftb"].includes(form.loader);
   const ftb = form.loader === "ftb";
   const packSource = ftb ? "/catalog/ftb" : "/catalog/modpacks";
   const selectedVersion = packVersions.find(
@@ -2000,8 +2336,11 @@ function CreateProfile({ catalog, host, initialGameId, onClose, onCreated }) {
   const update = (key, value) =>
     setForm((previous) => ({ ...previous, [key]: value }));
   useEffect(() => {
+    if (!minecraft) return;
+    let cancelled = false;
     api("/catalog/minecraft-versions")
       .then((data) => {
+        if (cancelled) return;
         const list = data.versions || [];
         setVersions(list);
         if (list[0])
@@ -2010,12 +2349,16 @@ function CreateProfile({ catalog, host, initialGameId, onClose, onCreated }) {
             version: previous.version || list[0],
           }));
       })
-      .catch((e) =>
-        setError(
-          `Minecraft-Versionen konnten nicht geladen werden: ${e.message}`,
-        ),
-      );
-  }, []);
+      .catch((e) => {
+        if (!cancelled)
+          setError(
+            `Minecraft-Versionen konnten nicht geladen werden: ${e.message}`,
+          );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [minecraft]);
   useEffect(() => {
     if (!modpack) return;
     let cancelled = false;
@@ -2079,18 +2422,27 @@ function CreateProfile({ catalog, host, initialGameId, onClose, onCreated }) {
     }));
   };
   const selectGame = (next) => {
+    if (next.available === false) return;
     providerGeneration.current += 1;
     clearPack();
     setPacks([]);
     setPackQuery("");
     setSearching(false);
     setGame(next);
+    setError("");
     setForm((previous) => ({
       ...previous,
       loader:
-        next.loaders?.[0] || (next.id === "minecraft" ? "vanilla" : "steam"),
-      memoryMb: next.defaultMemoryMb,
+        next.loaders?.[0] || (next.id === "minecraft" ? "vanilla" : "default"),
+      version:
+        next.id === "minecraft" ? versions[0] || "" : defaultGameVersion(next),
+      memoryMb: Math.min(next.defaultMemoryMb || 4096, memoryMax),
       port: next.defaultPort,
+      maxPlayers: defaultGamePlayers(next),
+      serverPassword: "",
+      worldName: "",
+      queryPort: next.defaultQueryPort || 27165,
+      beaconPort: next.defaultBeaconPort || 15000,
     }));
   };
   const selectPack = async (pack) => {
@@ -2136,10 +2488,19 @@ function CreateProfile({ catalog, host, initialGameId, onClose, onCreated }) {
   };
   const submit = async (event) => {
     event.preventDefault();
+    if (submitLock.current) return;
+    if (!game || game.available === false || memoryMin > memoryMax) {
+      setError(
+        game?.unavailableReason ||
+          "Für dieses Spiel stehen auf diesem Host nicht genug Ressourcen zur Verfügung.",
+      );
+      return;
+    }
+    submitLock.current = true;
     setError("");
     setBusy(true);
     try {
-      let collectionId = form.collectionId.trim();
+      let collectionId = game.id === "gmod" ? form.collectionId.trim() : "";
       if (collectionId.startsWith("https://")) {
         const url = new URL(collectionId);
         if (
@@ -2157,17 +2518,27 @@ function CreateProfile({ catalog, host, initialGameId, onClose, onCreated }) {
         name: form.name.trim(),
         gameId: game.id,
         loader: form.loader,
-        version: minecraft ? form.version : "latest",
+        version: minecraft ? form.version : defaultGameVersion(game),
         memoryMb: Number(form.memoryMb),
         port: Number(form.port),
         maxPlayers: Number(form.maxPlayers),
-        ...(minecraft
-          ? { eulaAccepted: form.eulaAccepted }
-          : {
-              collectionId,
-              gamemode: form.gamemode,
-              map: form.map.trim(),
-            }),
+        ...(minecraft ? { eulaAccepted: form.eulaAccepted } : {}),
+        ...(game.id === "gmod"
+          ? { collectionId, gamemode: form.gamemode, map: form.map.trim() }
+          : {}),
+        ...(["valheim", "factorio"].includes(game.id)
+          ? { serverPassword: form.serverPassword }
+          : {}),
+        ...(["valheim", "terraria", "factorio"].includes(game.id) &&
+        form.worldName.trim()
+          ? { worldName: form.worldName.trim() }
+          : {}),
+        ...(game.id === "squad"
+          ? {
+              queryPort: Number(form.queryPort || 27165),
+              beaconPort: Number(form.beaconPort || 15000),
+            }
+          : {}),
       };
       if (modpack) {
         payload.modpackId = form.modpackId;
@@ -2176,8 +2547,10 @@ function CreateProfile({ catalog, host, initialGameId, onClose, onCreated }) {
       await api("/profiles", { method: "POST", body: payload });
       await onCreated();
     } catch (e) {
-      setError(e.message);
+      if (e.status === 401) onUnauthorized();
+      else setError(e.message);
     } finally {
+      submitLock.current = false;
       setBusy(false);
     }
   };
@@ -2202,14 +2575,23 @@ function CreateProfile({ catalog, host, initialGameId, onClose, onCreated }) {
           <div className="game-select-grid">
             {catalog.map((item) => (
               <button
-                className={`game-select ${game?.id === item.id ? "selected" : ""}`}
+                className={`game-select ${game?.id === item.id ? "selected" : ""} ${item.available === false ? "unavailable" : ""}`}
                 key={item.id}
                 onClick={() => selectGame(item)}
+                disabled={item.available === false}
+                title={item.unavailableReason}
               >
                 <GameArt game={item.id} compact />
                 <div>
                   <h3>{item.name}</h3>
                   <p>{item.description}</p>
+                  {item.available === false && (
+                    <p className="game-unavailable-reason">
+                      <LockKeyhole size={12} />{" "}
+                      {item.unavailableReason ||
+                        "Auf diesem Host nicht verfügbar."}
+                    </p>
+                  )}
                   <span className="select-radio">
                     {game?.id === item.id && <Check size={13} />}
                   </span>
@@ -2224,7 +2606,7 @@ function CreateProfile({ catalog, host, initialGameId, onClose, onCreated }) {
             </p>
             <button
               className="button primary"
-              disabled={!game}
+              disabled={!game || game.available === false}
               onClick={() => setStep(2)}
             >
               Weiter <ArrowRight size={16} />
@@ -2241,9 +2623,7 @@ function CreateProfile({ catalog, host, initialGameId, onClose, onCreated }) {
               </div>
             )}
             <div className="selected-game">
-              <span className={`game-mini ${minecraft ? "green" : "blue"}`}>
-                {minecraft ? <Box size={20} /> : <span>g</span>}
-              </span>
+              <GameBadge game={game?.id} size={20} />
               <strong>{game?.name}</strong>
               <button
                 className="text-button"
@@ -2253,6 +2633,12 @@ function CreateProfile({ catalog, host, initialGameId, onClose, onCreated }) {
                 Ändern
               </button>
             </div>
+            {game?.notice && (
+              <div className="inline-note game-notice">
+                <CircleHelp size={17} />
+                <span>{game.notice}</span>
+              </div>
+            )}
             <label>
               Profilname
               <input
@@ -2263,7 +2649,7 @@ function CreateProfile({ catalog, host, initialGameId, onClose, onCreated }) {
                 placeholder={
                   minecraft
                     ? "z. B. Die Feierabend-Welt"
-                    : "z. B. Garry’s Mod mit Freunden"
+                    : `z. B. ${game?.name} mit Freunden`
                 }
                 value={form.name}
                 onChange={(e) => update("name", e.target.value)}
@@ -2437,7 +2823,7 @@ function CreateProfile({ catalog, host, initialGameId, onClose, onCreated }) {
                   </div>
                 )}
               </>
-            ) : (
+            ) : game?.id === "gmod" ? (
               <>
                 <label>
                   Spielmodus
@@ -2494,8 +2880,103 @@ function CreateProfile({ catalog, host, initialGameId, onClose, onCreated }) {
                   )}
                 </label>
               </>
+            ) : null}
+            {["valheim", "terraria", "factorio"].includes(game?.id) && (
+              <>
+                {["terraria", "factorio"].includes(game.id) && (
+                  <p className="console-help game-version-note">
+                    Native {gameName(game.id)}-Serverversion:{" "}
+                    <strong>{defaultGameVersion(game)}</strong>
+                  </p>
+                )}
+                <label>
+                  Weltname <span className="optional">optional</span>
+                  <input
+                    maxLength={40}
+                    pattern={"[A-Za-z0-9_\\-]{1,40}"}
+                    value={form.worldName}
+                    onChange={(event) =>
+                      update("worldName", event.target.value)
+                    }
+                    placeholder="z. B. Feierabend_Welt"
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                  <small>
+                    Bis zu 40 Buchstaben (A–Z), Zahlen, Unterstriche oder
+                    Bindestriche. Leer lassen für den Standardnamen.
+                  </small>
+                </label>
+                {["valheim", "factorio"].includes(game.id) && (
+                  <label>
+                    Serverpasswort
+                    <input
+                      type="password"
+                      required
+                      minLength={8}
+                      maxLength={64}
+                      pattern={"[A-Za-z0-9_\\-]{8,64}"}
+                      autoComplete="new-password"
+                      value={form.serverPassword}
+                      onChange={(event) =>
+                        update("serverPassword", event.target.value)
+                      }
+                      placeholder="Passwort für den Spielbeitritt"
+                      spellCheck={false}
+                    />
+                    <small>
+                      8–64 Buchstaben, Zahlen, Unterstriche oder Bindestriche.
+                      Dieses Passwort wird nach dem Anlegen nicht im Panel
+                      angezeigt.
+                    </small>
+                    {game.id === "factorio" && (
+                      <small>
+                        Beitritt direkt über die Server-IP mit diesem Passwort.
+                        Die Prüfung des Factorio-Spielkontos bleibt aktiviert.
+                      </small>
+                    )}
+                  </label>
+                )}
+              </>
+            )}
+            {game?.id === "squad" && (
+              <div className="form-row">
+                <label>
+                  Query-Port <span className="optional">optional</span>
+                  <input
+                    type="number"
+                    min="1024"
+                    max="65535"
+                    value={form.queryPort}
+                    onChange={(event) =>
+                      update("queryPort", event.target.value)
+                    }
+                    placeholder="27165"
+                  />
+                </label>
+                <label>
+                  Beacon-Port <span className="optional">optional</span>
+                  <input
+                    type="number"
+                    min="1024"
+                    max="65535"
+                    value={form.beaconPort}
+                    onChange={(event) =>
+                      update("beaconPort", event.target.value)
+                    }
+                    placeholder="15000"
+                  />
+                </label>
+              </div>
             )}
             <div className="resource-section">
+              {memoryMin > memoryMax && (
+                <p className="console-help console-disabled" role="status">
+                  Dieses Spiel benötigt mindestens {ram(memoryMin)} Profil-RAM.
+                  Auf diesem Host stehen nach der Systemreserve {ram(memoryMax)}{" "}
+                  zur Verfügung.
+                </p>
+              )}
               <div className="label-line">
                 <strong>Arbeitsspeicher</strong>
                 <span className="ram-value">{ram(form.memoryMb)}</span>
@@ -2503,14 +2984,14 @@ function CreateProfile({ catalog, host, initialGameId, onClose, onCreated }) {
               <input
                 type="range"
                 aria-label="Arbeitsspeicher in MB"
-                min="1024"
+                min={memoryMin}
                 max={memoryMax}
                 step="512"
                 value={form.memoryMb}
                 onChange={(e) => update("memoryMb", Number(e.target.value))}
               />
               <div className="range-labels">
-                <span>1 GB</span>
+                <span>{ram(memoryMin)}</span>
                 <span>{ram(memoryReserve)} bleiben für System &amp; Panel</span>
                 <span>{ram(memoryMax)}</span>
               </div>
@@ -2541,10 +3022,17 @@ function CreateProfile({ catalog, host, initialGameId, onClose, onCreated }) {
                   type="number"
                   required
                   min="1"
-                  max="128"
+                  max={game?.maxPlayers || 128}
                   value={form.maxPlayers}
                   onChange={(e) => update("maxPlayers", e.target.value)}
                 />
+                {game?.id === "squad" && (
+                  <small>
+                    Bis zu 100 Plätze sind die Obergrenze der Vorlage. Die
+                    VPS-Ressourcen garantieren keine Leistung für 100
+                    gleichzeitige Spieler.
+                  </small>
+                )}
               </label>
             </div>
             {minecraft && (
@@ -2588,6 +3076,8 @@ function CreateProfile({ catalog, host, initialGameId, onClose, onCreated }) {
               className="button primary"
               disabled={
                 busy ||
+                game?.available === false ||
+                memoryMin > memoryMax ||
                 (modpack && !form.modpackVersion) ||
                 (minecraft && !form.version)
               }

@@ -2,7 +2,7 @@
 
 Eine deutschsprachige Gameserver-Oberfläche für einen einzelnen VPS: Spiele und Minecraft-Modpacks als getrennte Profile verwalten und zwischen ihnen wechseln, ohne den bisherigen Spielstand zu überschreiben.
 
-**Entwicklungsstand:** MVP mit Sandbox und PufferPanel-Adapter; auf Debian 13 mit Docker und HTTPS eingerichtet. Start/Stopp, Containerrechte und Backup/Wiederherstellung wurden gegen die echte Laufzeit geprüft. FTB Evolution 2 1.9.0 ist mit verbundenen Spielern nachgewiesen; weitere Minecraft-Varianten und GMod-Collections benötigen ihre jeweiligen Spieltests.
+**Entwicklungsstand:** Auf Debian 13 mit Docker und HTTPS eingerichtet, einschließlich der Erweiterung um Valheim, Terraria 1.4.5.8 und Factorio 2.1.24. Diese drei Spiele wurden mit isolierten echten Instanzen geprüft. FTB Evolution 2 wurde mit verbundenen Spielern geprüft; Garry's Mod lädt die konfigurierte Collection einschließlich ULX. Squad bleibt nach einem fehlgeschlagenen nativen Starttest gesperrt; Farming Simulator 25 benötigt eine Windows-/Lizenzanbindung. Der konkrete Prüfumfang steht in [validation.md](gameswitch/docs/validation.md).
 
 ## Lokal starten
 
@@ -27,10 +27,11 @@ Der gebaute Server läuft standardmäßig unter `http://127.0.0.1:3001`. Konfigu
 ## Funktionsumfang
 
 - Minecraft-Profile mit auswählbaren Versionen und unterstützten Loadern; Feed-the-Beast- und Modrinth-Modpacks über Suche und konkrete Packversion, einschließlich FTB Evolution 2 aus dem offiziellen FTB-Katalog.
-- Garry's Mod mit Sandbox oder Trouble in Terrorist Town, Steam-Workshop-Collection, Map, Spielerzahl und separatem Profil.
+- Garry's Mod mit Sandbox oder Trouble in Terrorist Town, Steam-Workshop-Collection, Map und ULX-Hilfe für Admin, Superadmin oder Entfernen der direkten Zuweisung per Steam-ID.
+- Valheim mit eigener Welt, getrennt gespeichertem Serverpasswort und Steam-Administratorliste; die Listenpflege benötigt eine gestoppte Instanz. Terraria 1.4.5.8 und Factorio 2.1.24 erhalten ebenfalls eigene Welten. Factorio startet mit Basisspiel, privatem IP-Beitritt, Serverpasswort und aktiver Kontoprüfung.
 - Ein aktives von GameSwitch verwaltetes Profil. Wechsel: laufende Instanz geordnet beenden → vollständiges Backup bestätigen → Ziel installieren/starten. Getrennte Serververzeichnisse bewahren die ursprünglichen Welten und Konfigurationen. Zusätzliche manuell gestartete Server außerhalb der verwalteten Profile liegen außerhalb dieser Steuerung.
 - Backup-Liste, Wiederherstellung im gestoppten Zustand mit vorheriger Sicherung, Konsole, Vorgangsfortschritt und Ereignisse.
-- Minecraft-Konsole mit Befehleingabe und OP-Hilfe für einen Spielernamen. Befehle benötigen eine angemeldete Administratorsitzung und werden ohne Shell an die laufende Instanz gesendet.
+- Befehleingabe für Minecraft, Garry's Mod, Terraria und Factorio; Minecraft mit OP-Hilfe. Valheim zeigt die Ausgabe und verwaltet Admins über eine Datei. Befehle benötigen eine angemeldete Administratorsitzung und werden an die Spielschnittstelle gesendet.
 - Neustart des aktiven Profils mit ausdrücklicher Bestätigung: Welt speichern, geordnet stoppen, vollständiges Backup abschließen und dasselbe Profil ohne Neuinstallation starten.
 - Persistente Profile und Jobs; widersprüchliche oder unterbrochene Abläufe brechen kontrolliert ab.
 - Ressourcenbudget passend für 8 vCPU / 16 GB RAM, mit Reserve für Betriebssystem und Panel. Große Modpacks müssen anhand ihrer eigenen Anforderungen dimensioniert werden.
@@ -40,6 +41,10 @@ Weitere Spiele werden als geprüfte serverseitige Definitionen hinzugefügt. Bel
 ## Sicherheit und späteres Hosting
 
 GameSwitch bindet standardmäßig nur an Loopback; im VPS-Betrieb steht ein HTTPS-Reverse-Proxy davor. Anmeldung, scrypt-Passworthashes, begrenzte Loginversuche, HttpOnly-/SameSite-/Secure-Cookies, CSRF-/Origin-Prüfung, Sicherheitsheader und validierte Eingaben gehören zur Anwendung. Zugangsdaten der Laufzeit bleiben auf dem Server. GameSwitch selbst benötigt keinen Docker-Socket. GitHub Actions ist für dieses Repository deaktiviert; Prüfungen laufen lokal oder auf dem VPS.
+
+Spielpasswörter liegen getrennt unter `DATA_DIR/profile-secrets` mit privaten Dateirechten; Profil- und Zustandsantworten enthalten nur Kennzeichen, ob sie gesetzt sind. Ein Neustart des PufferPanel-Dienstes beendet auch verwaltete Spielprozesse. Ein reines Oberflächenupdate darf deshalb nur den GameSwitch-Dienst neu starten.
+
+Fehlgeschlagene Serveraktionen erhalten eine Fehler-ID zur Zuordnung im privaten Dienstjournal. Die Diagnose speichert nur freigegebene Metadaten und feste Fehlerkategorien; Anfrageinhalte, Passwörter und rohe Laufzeitantworten werden nicht übernommen. Details zum administrativen Zugriff stehen in [deployment.md](gameswitch/docs/deployment.md).
 
 Die echte Laufzeit verwendet **diesen gepatchten PufferPanel-Fork**. Die Backup-Erweiterung meldet tatsächlichen Abschluss beziehungsweise Fehler; ein unverändertes PufferPanel wird dafür abgelehnt. Das ist eine Voraussetzung für den sicheren Wechselablauf.
 

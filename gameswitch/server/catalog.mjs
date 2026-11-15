@@ -1,18 +1,23 @@
 import { z } from 'zod';
 
 export const catalog = [
-  { id: 'minecraft', name: 'Minecraft Java', description: 'Vanilla, Paper, Fabric, Forge, Feed the Beast und Modrinth-Modpacks', kind: 'minecraft', loaders: ['vanilla', 'paper', 'fabric', 'forge', 'ftb', 'modrinth'], defaultPort: 25565, defaultMemoryMb: 6144 },
-  { id: 'gmod', name: "Garry’s Mod", description: 'Sandbox mit Steam-Workshop-Collection', kind: 'steam', loaders: ['steam'], defaultPort: 27015, defaultMemoryMb: 4096 },
+  { id: 'minecraft', name: 'Minecraft Java', description: 'Vanilla, Paper, Fabric, Forge, Feed the Beast und Modrinth-Modpacks', kind: 'minecraft', loaders: ['vanilla', 'paper', 'fabric', 'forge', 'ftb', 'modrinth'], defaultPort: 25565, defaultMemoryMb: 6144, available: true, consoleInput: true, adminKind: 'minecraft', minMemoryMb: 1024, maxPlayers: 128 },
+  { id: 'gmod', name: "Garry’s Mod", description: 'Sandbox und TTT mit Steam-Workshop-Collection', kind: 'steam', loaders: ['steam'], defaultPort: 27015, defaultMemoryMb: 4096, available: true, consoleInput: true, adminKind: 'ulx', minMemoryMb: 1024, maxPlayers: 128, notice: 'Der Adminhelfer benötigt ULX/ULib in der ausgewählten Collection.' },
+  { id: 'squad', name: 'Squad', description: 'Linux-Anbindung mit privatem RCON und Steam-Administratoren vorbereitet', kind: 'steam', loaders: ['steam'], defaultPort: 7787, defaultQueryPort: 27165, defaultBeaconPort: 15000, defaultMemoryMb: 12288, available: false, consoleInput: true, adminKind: 'squad', minMemoryMb: 8192, maxPlayers: 100, unavailableReason: 'Installation erfolgreich, aber der native Starttest auf dieser VPS stürzt beim Kartenladen mit Signal 11 ab. Start bis zur Behebung gesperrt. Lizenzierte Squad-Server sind auf VPS nicht zulässig.', notice: 'Auf dieser VPS nur als nicht lizenzierter Server für den Custom Browser. Offizielle Serverlizenzen sind für VPS/VM-Hosting nicht vorgesehen.' },
+  { id: 'valheim', name: 'Valheim', description: 'Eigene Welt mit Serverpasswort und Administratorliste', kind: 'steam', loaders: ['steam'], defaultPort: 2456, defaultMemoryMb: 4096, available: true, consoleInput: false, adminKind: 'valheim', minMemoryMb: 2048, maxPlayers: 10, notice: 'Passwort wird getrennt vom Profil gespeichert. Kein Konsoleneingang; Administratoren werden über die Berechtigungsliste verwaltet.' },
+  { id: 'terraria', name: 'Terraria', description: 'Offizieller Linux-Server 1.4.5.8 mit eigener Welt', kind: 'native', loaders: ['native'], defaultVersion: '1.4.5.8', defaultPort: 7777, defaultMemoryMb: 2048, available: true, consoleInput: true, adminKind: 'none', minMemoryMb: 1024, maxPlayers: 16, notice: 'Vanilla Terraria bietet keinen Minecraft-ähnlichen Operatorrang. Verwaltung über die Serverkonsole.' },
+  { id: 'factorio', name: 'Factorio', description: 'Offizieller Headless-Server 2.1.24 mit eigener Fabrikwelt', kind: 'native', loaders: ['native'], defaultVersion: '2.1.24', defaultPort: 34197, defaultMemoryMb: 4096, available: true, consoleInput: true, adminKind: 'none', minMemoryMb: 2048, maxPlayers: 32, notice: 'Beitritt per IP und Serverpasswort mit aktiver Kontoprüfung. Administratoren über /promote Spielername verwalten; passende Clientversion erforderlich.' },
+  { id: 'fs25', name: 'Farming Simulator 25', description: 'Landwirtschafts-Simulator 25 Dedicated Server', kind: 'native', loaders: ['native'], defaultPort: 10823, defaultMemoryMb: 8192, available: false, consoleInput: false, adminKind: 'none', minMemoryMb: 8192, maxPlayers: 16, unavailableReason: 'Der offizielle Dedicated Server benötigt Windows und eine separate Spiellizenz. Auf dieser Debian-VPS ist kein unterstützter nativer Betrieb eingerichtet.' },
 ];
 
 const id = z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/);
 const ftbId = z.string().regex(/^[1-9][0-9]{0,9}$/);
 const ftbBase = 'https://api.feed-the-beast.com/v1/modpacks/public/modpack';
 export const profileSchema = z.object({
-  name: z.string().trim().min(2).max(60).regex(/^[^\x00-\x1f\x7f]+$/),
-  gameId: z.enum(['minecraft', 'gmod']),
+  name: z.string().trim().min(2).max(60).regex(/^[^\x00-\x1f\x7f-\x9f\u2028\u2029]+$/),
+  gameId: z.enum(['minecraft', 'gmod', 'squad', 'valheim', 'terraria', 'factorio', 'fs25']),
   version: z.string().regex(/^(latest|[a-zA-Z0-9][a-zA-Z0-9._-]{0,39})$/),
-  loader: z.enum(['vanilla', 'paper', 'fabric', 'forge', 'ftb', 'modrinth', 'steam']),
+  loader: z.enum(['vanilla', 'paper', 'fabric', 'forge', 'ftb', 'modrinth', 'steam', 'native']),
   modpackId: id.optional(), modpackVersion: id.optional(),
   collectionId: z.string().max(180).optional(),
   gamemode: z.enum(['sandbox', 'terrortown']).optional(),
@@ -20,11 +25,29 @@ export const profileSchema = z.object({
   maxPlayers: z.number().int().min(1).max(128),
   memoryMb: z.number().int().min(1024).max(13312),
   port: z.number().int().min(1024).max(65535),
+  queryPort: z.number().int().min(1024).max(65535).optional(),
+  beaconPort: z.number().int().min(1024).max(65535).optional(),
+  worldName: z.string().regex(/^[A-Za-z0-9_-]{1,40}$/, 'Weltname: 1–40 Buchstaben, Ziffern, Unterstriche oder Bindestriche.').optional(),
+  serverPassword: z.string().min(8).max(64).regex(/^[A-Za-z0-9_-]+$/, 'Passwort: nur Buchstaben, Ziffern, Unterstriche oder Bindestriche.').optional(),
   eulaAccepted: z.boolean().optional(),
 }).strict().superRefine((profile, ctx) => {
-  if (profile.gameId === 'minecraft' && (profile.loader === 'steam' || !profile.eulaAccepted)) ctx.addIssue({ code: 'custom', message: 'Minecraft benötigt einen gültigen Loader und die EULA-Zustimmung.' });
+  const game = catalog.find(game => game.id === profile.gameId);
+  if (!game.available) ctx.addIssue({ code: 'custom', message: game.unavailableReason });
+  if (!game.loaders.includes(profile.loader)) ctx.addIssue({ code: 'custom', message: 'Dieser Loader passt nicht zum ausgewählten Spiel.' });
+  if (profile.memoryMb < game.minMemoryMb) ctx.addIssue({ code: 'custom', message: `${game.name} benötigt mindestens ${game.minMemoryMb} MB Profil-RAM.` });
+  if (profile.maxPlayers > game.maxPlayers) ctx.addIssue({ code: 'custom', message: `${game.name} unterstützt in dieser Vorlage höchstens ${game.maxPlayers} Spieler.` });
+  if (profile.gameId === 'minecraft' && !profile.eulaAccepted) ctx.addIssue({ code: 'custom', message: 'Minecraft benötigt die EULA-Zustimmung.' });
   if (profile.gameId === 'gmod' && profile.loader !== 'steam') ctx.addIssue({ code: 'custom', message: 'Garry’s Mod benötigt Steam.' });
   if (profile.gameId !== 'gmod' && profile.gamemode !== undefined) ctx.addIssue({ code: 'custom', message: 'Spielmodi sind nur für Garry’s Mod erlaubt.' });
+  if (profile.gameId !== 'gmod' && (profile.collectionId !== undefined || profile.map !== undefined)) ctx.addIssue({ code: 'custom', message: 'Workshop-Collection und Karte sind nur für Garry’s Mod erlaubt.' });
+  if (!['valheim', 'terraria', 'factorio'].includes(profile.gameId) && profile.worldName !== undefined) ctx.addIssue({ code: 'custom', message: 'Ein Weltname ist nur für Valheim, Terraria oder Factorio erlaubt.' });
+  if (['valheim', 'factorio'].includes(profile.gameId) && !profile.serverPassword) ctx.addIssue({ code: 'custom', message: 'Dieses Spiel benötigt ein Serverpasswort mit mindestens 8 Zeichen.' });
+  if (!['valheim', 'factorio'].includes(profile.gameId) && profile.serverPassword !== undefined) ctx.addIssue({ code: 'custom', message: 'Serverpasswörter werden hier nur für Valheim und Factorio unterstützt.' });
+  if (profile.gameId !== 'squad' && (profile.queryPort !== undefined || profile.beaconPort !== undefined)) ctx.addIssue({ code: 'custom', message: 'Query- und Beacon-Port sind nur für Squad erlaubt.' });
+  if (['gmod', 'squad', 'valheim'].includes(profile.gameId) && profile.version !== 'latest') ctx.addIssue({ code: 'custom', message: 'Diese Steam-Vorlage installiert die aktuelle Dedicated-Server-Version.' });
+  if (profile.gameId === 'terraria' && profile.version !== '1.4.5.8') ctx.addIssue({ code: 'custom', message: 'Diese Terraria-Vorlage unterstützt Version 1.4.5.8.' });
+  if (profile.gameId === 'factorio' && profile.version !== '2.1.24') ctx.addIssue({ code: 'custom', message: 'Diese Factorio-Vorlage unterstützt Version 2.1.24.' });
+  if (profile.gameId !== 'minecraft' && (profile.modpackId || profile.modpackVersion)) ctx.addIssue({ code: 'custom', message: 'Minecraft-Modpacks sind nur für Minecraft erlaubt.' });
   if (['ftb', 'modrinth'].includes(profile.loader) && (!profile.modpackId || !profile.modpackVersion)) ctx.addIssue({ code: 'custom', message: 'Modpack und feste Modpack-Version auswählen.' });
   if (!['ftb', 'modrinth'].includes(profile.loader) && (profile.modpackId || profile.modpackVersion)) ctx.addIssue({ code: 'custom', message: 'Modpack nur mit FTB- oder Modrinth-Loader erlaubt.' });
   if (profile.loader === 'ftb' && (!ftbId.safeParse(profile.modpackId).success || !ftbId.safeParse(profile.modpackVersion).success)) ctx.addIssue({ code: 'custom', message: 'FTB benötigt feste numerische Pack- und Versions-IDs.' });

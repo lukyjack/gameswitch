@@ -10,26 +10,51 @@ import { openStore } from './store.mjs';
 import { catalog, profileSchema, parseCollection, providers } from './catalog.mjs';
 import { SandboxRuntime, PufferRuntime } from './runtime.mjs';
 import { Controller } from './controller.mjs';
-import { consoleCommandSchema, safeCommandVerb } from './console-command.mjs';
+import { parseConsoleCommand, safeCommandVerb } from './console-command.mjs';
 import { FTB_NATIVE_RESERVE_MB } from './minecraft-memory.mjs';
+import { validateGamePorts } from './game-ports.mjs';
+import { writeProfileSecrets } from './profile-secrets.mjs';
+import { buildAdminAction } from './game-admin.mjs';
+import { createDiagnostics, validCorrelationId, friendlyDiagnosticMessage } from './diagnostics.mjs';
 
 const token = () => randomBytes(32).toString('base64url');
 const digest = value => createHash('sha256').update(value).digest('hex');
 const hashPassword = (password, salt) => scryptSync(password, salt, 64, { N: 32768, maxmem: 64 * 1024 * 1024 }).toString('hex');
 const credentials = z.object({ username: z.string().regex(/^[a-zA-Z0-9_-]{3,32}$/), password: z.string().min(14).max(128) }).strict();
 const asyncRoute = callback => (req, res, next) => Promise.resolve(callback(req, res, next)).catch(next);
+const profileFields = ['id', 'name', 'gameId', 'version', 'loader', 'modpackId', 'modpackVersion', 'modpackName', 'modpackVersionName', 'javaVersion', 'minimumMemoryMb', 'recommendedMemoryMb', 'collectionId', 'gamemode', 'map', 'maxPlayers', 'memoryMb', 'port', 'queryPort', 'beaconPort', 'worldName', 'serverId', 'installed', 'status', 'createdAt', 'serverPasswordSet', 'rconPasswordSet'];
+const publicProfile = profile => ({
+  ...Object.fromEntries(profileFields.filter(key => profile[key] !== undefined).map(key => [key, profile[key]])),
+  consoleInput: catalog.find(game => game.id === profile.gameId)?.consoleInput ?? profile.gameId === 'minecraft',
+  adminKind: catalog.find(game => game.id === profile.gameId)?.adminKind || 'none',
+});
 
 export async function createApp(options = {}) {
   const config = options.config || readConfig();
   const store = options.store || await openStore(config.dataDir);
   const runtime = options.runtime || (config.mode === 'pufferpanel' ? new PufferRuntime(config, options.fetcher) : new SandboxRuntime(config));
-  const controller = new Controller(store, runtime);
+  const diagnostics = options.diagnostics || createDiagnostics();
+  const controller = new Controller(store, runtime, diagnostics);
   const catalogProvider = options.providers || providers(options.fetcher);
   const bootstrapToken = store.state.admin ? null : token();
   const sessions = new Map();
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', config.trustLoopbackProxy ? 'loopback' : false);
+  const failure = (error, req, res, status, message) => {
+    let errorId = req.requestId;
+    try {
+      const reported = diagnostics.error(error, { requestId: req.requestId, operation: 'http', stage: 'request', method: req.method, status });
+      if (validCorrelationId(reported)) errorId = reported;
+    } catch { /* Diagnostics must never prevent an error response. */ }
+    return res.status(status).json({ error: `${message} Fehler-ID: ${errorId}`, errorId, requestId: req.requestId });
+  };
+  app.use((req, res, next) => {
+    // Correlation IDs come from this process, never from untrusted request headers.
+    req.requestId = randomUUID();
+    res.set('X-Request-ID', req.requestId);
+    next();
+  });
   app.use(helmet({ contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], scriptSrc: ["'self'"], styleSrc: ["'self'", "'unsafe-inline'"], imgSrc: ["'self'", 'data:'], objectSrc: ["'none'"], frameAncestors: ["'none'"], baseUri: ["'none'"], upgradeInsecureRequests: config.secureCookies ? [] : null } }, strictTransportSecurity: config.secureCookies ? undefined : false }));
   app.use((req, res, next) => {
     const publicHost = new URL(config.origin).host;
@@ -98,15 +123,16 @@ export async function createApp(options = {}) {
       try { await controller.reconcile(); } catch { /* Unknown state is displayed; mutation still fails closed. */ }
     }
     const { profiles, activeProfileId, job, backups, events } = store.state;
-    res.json({ mode: config.mode, profiles, activeProfileId, job, backups, events, catalog,
+    res.json({ mode: config.mode, profiles: profiles.map(publicProfile), activeProfileId, job, backups, events, catalog,
       host: { name: config.mode === 'sandbox' ? 'Lokale Sandbox · VPS-Zielkonfiguration' : 'Netcup VPS', cpuCores: config.cpuCores, memoryMb: config.memoryMb, reservedMemoryMb: config.reservedMemoryMb },
       security: { authenticated: true, csrf: true, localOnly: ['127.0.0.1', '::1', 'localhost'].includes(config.host) } });
   }));
   app.post('/api/profiles', asyncRoute(async (req, res) => {
-    if (!store.healthy) return res.status(503).json({ error: 'Persistenzfehler. Dienst nach Behebung neu starten.' });
+    if (!store.healthy) return failure(Object.assign(new Error('Persistence unavailable'), { code: 'PERSISTENCE_UNAVAILABLE' }), req, res, 503, 'Persistenzfehler. Dienst nach Behebung neu starten.');
     if (controller.busy) return res.status(409).json({ error: 'Bitte laufende Aktion abwarten.' });
     if (store.state.profiles.length >= 50) return res.status(409).json({ error: 'Maximal 50 Profile erlaubt.' });
     const input = profileSchema.parse(req.body);
+    validateGamePorts(input, config);
     if (input.memoryMb > config.memoryMb - config.reservedMemoryMb) return res.status(400).json({ error: 'RAM-Reserve für Betriebssystem und Panel unterschritten.' });
     if ([2222, 3000, 3001, 5173, 8080, 8443, 9090, config.port, Number(new URL(config.pufferUrl || 'http://127.0.0.1:8080').port)].includes(input.port)) return res.status(400).json({ error: 'Dieser Port ist für Administration oder Panel reserviert.' });
     if (input.gameId === 'gmod') { input.collectionId = parseCollection(input.collectionId); input.gamemode ||= 'sandbox'; }
@@ -129,23 +155,28 @@ export async function createApp(options = {}) {
       input.recommendedMemoryMb = selected.recommendedMemoryMb;
     }
     if (controller.busy || store.state.profiles.length >= 50) return res.status(409).json({ error: 'Profilanlage gerade nicht möglich. Bitte erneut versuchen.' });
-    const profile = { ...input, id: randomUUID(), serverId: randomUUID().replaceAll('-', '').slice(0, 16), installed: false, status: 'stopped', createdAt: new Date().toISOString() };
+    const { serverPassword, ...settings } = input;
+    const profile = { ...settings, id: randomUUID(), serverId: randomUUID().replaceAll('-', '').slice(0, 16), installed: false, status: 'stopped', createdAt: new Date().toISOString() };
+    if (serverPassword || input.gameId === 'squad') {
+      const flags = await writeProfileSecrets(config, profile.id, { ...(serverPassword ? { serverPassword } : {}), ...(input.gameId === 'squad' ? { rconPassword: token() } : {}) });
+      Object.assign(profile, flags);
+    }
+    if (controller.busy || store.state.profiles.length >= 50) return res.status(409).json({ error: 'Profilanlage gerade nicht möglich. Bitte erneut versuchen.' });
     store.state.profiles.push(profile); store.event(`Profil „${profile.name}“ angelegt.`); await store.save();
-    res.status(201).json({ profile });
+    res.status(201).json({ profile: publicProfile(profile) });
   }));
-  for (const action of ['activate', 'restart', 'stop', 'backup']) app.post(`/api/profiles/:id/${action}`, (req, res, next) => { try { if (action === 'restart') z.object({}).strict().parse(req.body ?? {}); res.status(202).json({ job: controller.begin(action, req.params.id) }); } catch (error) { next(error); } });
+  for (const action of ['activate', 'restart', 'stop', 'backup']) app.post(`/api/profiles/:id/${action}`, (req, res, next) => { try { if (action === 'restart') z.object({}).strict().parse(req.body ?? {}); res.status(202).json({ job: controller.begin(action, req.params.id, undefined, { requestId: req.requestId }) }); } catch (error) { next(error); } });
   app.post('/api/backups/:id/restore', (req, res, next) => {
     const backup = store.state.backups.find(item => item.id === req.params.id);
     if (!backup) return res.status(404).json({ error: 'Sicherung nicht gefunden.' });
-    try { res.status(202).json({ job: controller.begin('restore', backup.profileId, backup.id) }); } catch (error) { next(error); }
+    try { res.status(202).json({ job: controller.begin('restore', backup.profileId, backup.id, { requestId: req.requestId }) }); } catch (error) { next(error); }
   });
   app.get('/api/profiles/:id/console', asyncRoute(async (req, res) => res.json({ lines: await runtime.console(controller.profile(req.params.id)) })));
   app.post('/api/profiles/:id/console', consoleLimit, asyncRoute(async (req, res) => {
-    if (!store.healthy) return res.status(503).json({ error: 'Persistenzfehler. Konsoleneingabe ist bis zur Behebung gesperrt.' });
+    if (!store.healthy) return failure(Object.assign(new Error('Persistence unavailable'), { code: 'PERSISTENCE_UNAVAILABLE' }), req, res, 503, 'Persistenzfehler. Konsoleneingabe ist bis zur Behebung gesperrt.');
     if (controller.busy) return res.status(409).json({ error: 'Eine Serveraktion läuft bereits. Bitte kurz warten.' });
     const profile = controller.profile(req.params.id);
-    if (profile.gameId !== 'minecraft') return res.status(400).json({ error: 'Konsoleneingaben sind derzeit für Minecraft verfügbar.' });
-    const { command } = consoleCommandSchema.parse(req.body);
+    const { command } = parseConsoleCommand(profile, req.body);
     // Reserve the same gate as start/stop/restore before awaiting any runtime I/O.
     controller.busy = true;
     try {
@@ -155,13 +186,33 @@ export async function createApp(options = {}) {
       try {
         await runtime.command(profile, command);
       } catch (error) {
-        if (error.code === 'CONSOLE_DELIVERY_UNCERTAIN') return res.status(502).json({ error: 'Die Bestätigung fehlt. Der Befehl kann bereits ausgeführt worden sein. Bitte die Konsole prüfen; es wird nicht automatisch erneut gesendet.' });
+        if (error.code === 'CONSOLE_DELIVERY_UNCERTAIN') return failure(error, req, res, 502, 'Die Bestätigung fehlt. Der Befehl kann bereits ausgeführt worden sein. Bitte die Konsole prüfen; es wird nicht automatisch erneut gesendet.');
         throw error;
       }
       res.json({ ok: true });
     } finally {
       controller.busy = false;
     }
+  }));
+  app.post('/api/profiles/:id/admin', consoleLimit, asyncRoute(async (req, res) => {
+    if (!store.healthy) return failure(Object.assign(new Error('Persistence unavailable'), { code: 'PERSISTENCE_UNAVAILABLE' }), req, res, 503, 'Persistenzfehler. Admin-Einstellungen sind bis zur Behebung gesperrt.');
+    if (controller.busy) return res.status(409).json({ error: 'Eine Serveraktion läuft bereits. Bitte kurz warten.' });
+    const profile = controller.profile(req.params.id);
+    const action = buildAdminAction(profile, req.body);
+    if (!profile.installed) return res.status(409).json({ error: 'Dieses Profil muss zuerst erfolgreich installiert werden.' });
+    controller.busy = true;
+    try {
+      store.event(`Admin-Einstellung (${req.body.role}) für „${profile.name}“ von ${req.session.username} angefordert.`);
+      await store.save();
+      try {
+        const result = await runtime.admin(profile, action);
+        res.json({ ok: true, notice: result.simulated ? 'Sandbox: Admin-Einstellung simuliert; keine echten Spielrechte verändert.' : action.notice, ...result });
+      } catch (error) {
+        if (error.code === 'CONSOLE_DELIVERY_UNCERTAIN') return failure(error, req, res, 502, 'Die Bestätigung fehlt. Der Admin-Befehl kann bereits ausgeführt worden sein. Bitte die Konsole prüfen; es wird nicht automatisch erneut gesendet.');
+        if (error.code === 'ADMIN_WRITE_UNCERTAIN') return failure(error, req, res, 502, 'Die Bestätigung der Adminliste fehlt. Bitte Konfiguration prüfen; es wird nicht automatisch erneut geschrieben.');
+        throw error;
+      }
+    } finally { controller.busy = false; }
   }));
   app.get('/api/catalog/modpacks', asyncRoute(async (req, res) => res.json(await catalogProvider.search(z.string().max(100).parse(req.query.q || '')))));
   app.get('/api/catalog/modpacks/:id/versions', asyncRoute(async (req, res) => res.json(await catalogProvider.versions(req.params.id))));
@@ -173,8 +224,9 @@ export async function createApp(options = {}) {
   try { await fs.access(path.join(dist, 'index.html')); app.use(express.static(dist, { dotfiles: 'deny', index: 'index.html' })); } catch { /* Vite handles development UI. */ }
   app.use((error, req, res, next) => {
     if (res.headersSent) return next(error);
-    const status = error instanceof z.ZodError || error.type === 'entity.parse.failed' ? 400 : error.type === 'entity.too.large' ? 413 : error.status || 500;
-    const message = error instanceof z.ZodError ? error.issues[0]?.message || 'Ungültige Eingabe.' : status >= 500 ? 'Serveraktion fehlgeschlagen. Verbindung und Konfiguration prüfen.' : error.message;
+    const status = error instanceof z.ZodError || error.type === 'entity.parse.failed' ? 400 : error.type === 'entity.too.large' ? 413 : Number.isInteger(error.status) && error.status >= 400 && error.status <= 599 ? error.status : 500;
+    const message = error instanceof z.ZodError ? error.issues[0]?.message || 'Ungültige Eingabe.' : error.type === 'entity.parse.failed' ? 'Ungültiges JSON in der Anfrage.' : error.type === 'entity.too.large' ? 'Die Anfrage überschreitet die erlaubte Größe.' : status >= 500 ? friendlyDiagnosticMessage(error) : error.message;
+    if (status >= 500) return failure(error, req, res, status, message);
     res.status(status).json({ error: message });
   });
   return { app, config, store, runtime, controller, bootstrapToken, close: async () => { await controller.pending; await store.flush(); sessions.clear(); } };

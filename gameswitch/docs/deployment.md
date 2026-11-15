@@ -58,6 +58,16 @@ Für eine öffentliche IP ohne Domain steht [Caddyfile.ip.example](../deploy/Cad
 
 Beim ersten Produktionsstart schreibt der Dienst den Einrichtungstoken in `DATA_DIR/setup-token` mit privaten Dateirechten. In der Entwicklung steht er im lokalen Terminal. Nur als Administrator auslesen, das Konto einrichten und den Token vertraulich behandeln. Der interne PufferPanel-Administrator und sein OAuth-Client werden mit [bootstrap-puffer.mjs](../deploy/bootstrap-puffer.mjs) eingerichtet; die gepatchte CLI nimmt das Passwort ausschließlich über `--password-stdin` entgegen. Diese internen Zugangsdaten erscheinen nicht in Prozessargumenten oder Ausgabe. Sitzungen sind pro Prozess; ein Neustart meldet Browser ab. Ein einzelner GameSwitch-Prozess verwaltet ein Datenverzeichnis; mehrere parallele Instanzen mit denselben Dateien werden nicht unterstützt.
 
+## Fehler-ID im Dienstjournal prüfen
+
+Behandelte Serverfehler und fehlgeschlagene Vorgänge zeigen eine Fehler-ID. Beim mitgelieferten systemd-Dienst schreibt der private JSON-Logger auf stderr ins Journal. Als Serveradministrator einen begrenzten Zeitraum und die angezeigte UUID verwenden:
+
+```sh
+sudo journalctl -u gameswitch.service --since '30 minutes ago' --no-pager -o cat | rg -F -- 'ANGEZEIGTE-FEHLER-UUID'
+```
+
+Ohne `rg` ist `grep -F --` für dieselbe feste UUID geeignet. Der Eintrag `gameswitch_error` enthält nur freigegebene Metadaten, feste Fehlerkategorien und gegebenenfalls einen Antwort-Fingerabdruck; keine rohen Laufzeitantworten oder Passwörter. `requestId`, `jobId` und der fehlgeschlagene Schritt erleichtern die Zuordnung. Die Oberfläche liest das Journal nicht aus. Journalzugriff und Aufbewahrungsfristen auf dem Host beschränken; GameSwitch richtet keine eigene Logdatei oder Rotation ein. Ein fehlender Eintrag kann auch durch Journalkonfiguration oder einen Logger-Schreibfehler entstehen. Eine fehlgeschlagene oder unbestätigte Spielaktion nicht allein zur Diagnose blind wiederholen.
+
 ## Freigabetest
 
 Für die aktuelle Evolution-2-Instanz sind acht vCPU, 12 GiB Container-RAM und beim nächsten regulären Start 8 GiB maximaler / 2 GiB anfänglicher Java-Heap vorgesehen. ServerCore 1.5.19 setzt Sichtweite 16 und Simulationsdistanz 6 über `dynamic.default-values` in `config/servercore/config.yml`; dies überschreibt die ebenfalls angepassten Werte in `server.properties`. Die vorhandenen dynamischen Simulationseinträge bleiben auf maximal 6 begrenzt und dürfen bei Last bis 5 reduzieren; es gibt keinen dynamischen Sichtweitenregler, der die gewünschten 16 herabsetzt. Die Packregeln für Mobcaps, Aktivierungsbereiche und Chunk-Ticks bleiben unverändert. Originalkonfigurationen liegen geschützt außerhalb des Spielecontainers unter `/root/gameswitch-config-backups/`.
