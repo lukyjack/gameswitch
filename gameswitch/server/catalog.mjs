@@ -3,6 +3,8 @@ import { z } from 'zod';
 export const catalog = [
   { id: 'minecraft', name: 'Minecraft Java', description: 'Vanilla, Paper, Fabric, Forge, Feed the Beast und Modrinth-Modpacks', kind: 'minecraft', loaders: ['vanilla', 'paper', 'fabric', 'forge', 'ftb', 'modrinth'], defaultPort: 25565, defaultMemoryMb: 6144, available: true, consoleInput: true, adminKind: 'minecraft', minMemoryMb: 1024, maxPlayers: 128 },
   { id: 'gmod', name: "Garry’s Mod", description: 'Sandbox und TTT mit Steam-Workshop-Collection', kind: 'steam', loaders: ['steam'], defaultPort: 27015, defaultMemoryMb: 4096, available: true, consoleInput: true, adminKind: 'ulx', minMemoryMb: 1024, maxPlayers: 128, notice: 'Der Adminhelfer benötigt ULX/ULib in der ausgewählten Collection.' },
+  { id: 'arma3', name: 'Arma 3', description: 'Linux-Server mit Koop-/Zeus-Missionen, Workshop-Mods und Steam-Administratoren', kind: 'steam', loaders: ['steam'], defaultPort: 2302, defaultMemoryMb: 6144, available: true, consoleInput: false, adminKind: 'arma3', minMemoryMb: 4096, maxPlayers: 32, notice: 'Serverdateien über Steam einrichten im Panel vorbereiten. In-Game-Admins melden sich mit #login an; Protokoll hier nur lesbar.' },
+  { id: 'dayz', name: 'DayZ', description: 'Linux-Communityserver mit Chernarus, Workshop-Mods und persistentem Spielstand', kind: 'steam', loaders: ['steam'], defaultPort: 2302, defaultQueryPort: 27016, defaultMemoryMb: 8192, available: true, consoleInput: false, adminKind: 'none', minMemoryMb: 4096, maxPlayers: 40, notice: 'Steam-Serverdateien zuerst geschützt vorbereiten. Vanilla hat hier keinen Steam-ID-Adminhelfer; erweiterte In-Game-Verwaltung benötigt passende Adminmods. Serverprotokoll nur lesbar.' },
   { id: 'squad', name: 'Squad', description: 'Linux-Anbindung mit privatem RCON und Steam-Administratoren vorbereitet', kind: 'steam', loaders: ['steam'], defaultPort: 7787, defaultQueryPort: 27165, defaultBeaconPort: 15000, defaultMemoryMb: 12288, available: false, consoleInput: true, adminKind: 'squad', minMemoryMb: 8192, maxPlayers: 100, unavailableReason: 'Installation erfolgreich, aber der native Starttest auf dieser VPS stürzt beim Kartenladen mit Signal 11 ab. Start bis zur Behebung gesperrt. Lizenzierte Squad-Server sind auf VPS nicht zulässig.', notice: 'Auf dieser VPS nur als nicht lizenzierter Server für den Custom Browser. Offizielle Serverlizenzen sind für VPS/VM-Hosting nicht vorgesehen.' },
   { id: 'valheim', name: 'Valheim', description: 'Eigene Welt mit Serverpasswort und Administratorliste', kind: 'steam', loaders: ['steam'], defaultPort: 2456, defaultMemoryMb: 4096, available: true, consoleInput: false, adminKind: 'valheim', minMemoryMb: 2048, maxPlayers: 10, notice: 'Passwort wird getrennt vom Profil gespeichert. Kein Konsoleneingang; Administratoren werden über die Berechtigungsliste verwaltet.' },
   { id: 'terraria', name: 'Terraria', description: 'Offizieller Linux-Server 1.4.5.8 mit eigener Welt', kind: 'native', loaders: ['native'], defaultVersion: '1.4.5.8', defaultPort: 7777, defaultMemoryMb: 2048, available: true, consoleInput: true, adminKind: 'none', minMemoryMb: 1024, maxPlayers: 16, notice: 'Vanilla Terraria bietet keinen Minecraft-ähnlichen Operatorrang. Verwaltung über die Serverkonsole.' },
@@ -15,11 +17,14 @@ const ftbId = z.string().regex(/^[1-9][0-9]{0,9}$/);
 const ftbBase = 'https://api.feed-the-beast.com/v1/modpacks/public/modpack';
 export const profileSchema = z.object({
   name: z.string().trim().min(2).max(60).regex(/^[^\x00-\x1f\x7f-\x9f\u2028\u2029]+$/),
-  gameId: z.enum(['minecraft', 'gmod', 'squad', 'valheim', 'terraria', 'factorio', 'fs25']),
+  gameId: z.enum(['minecraft', 'gmod', 'arma3', 'dayz', 'squad', 'valheim', 'terraria', 'factorio', 'fs25']),
   version: z.string().regex(/^(latest|[a-zA-Z0-9][a-zA-Z0-9._-]{0,39})$/),
   loader: z.enum(['vanilla', 'paper', 'fabric', 'forge', 'ftb', 'modrinth', 'steam', 'native']),
   modpackId: id.optional(), modpackVersion: id.optional(),
   collectionId: z.string().max(180).optional(),
+  mission: z.string().max(80).optional(),
+  workshopIds: z.array(z.string().regex(/^[1-9][0-9]{4,19}$/)).max(30).refine(ids => new Set(ids).size === ids.length, 'Workshop-IDs dürfen nicht doppelt vorkommen.').optional(),
+  adminSteamIds: z.array(z.string().regex(/^[0-9]{17}$/).refine(value => { if (!/^[0-9]{17}$/.test(value)) return false; const account = BigInt(value) - 76561197960265728n; return account > 0n && account <= 0xffffffffn; }, 'Ungültige Steam-Spieler-ID.')).max(20).refine(ids => new Set(ids).size === ids.length, 'Admin-IDs dürfen nicht doppelt vorkommen.').optional(),
   gamemode: z.enum(['sandbox', 'terrortown']).optional(),
   map: z.string().regex(/^[a-zA-Z0-9_/-]{1,80}$/).refine(value => !value.includes('..')).optional(),
   maxPlayers: z.number().int().min(1).max(128),
@@ -41,10 +46,15 @@ export const profileSchema = z.object({
   if (profile.gameId !== 'gmod' && profile.gamemode !== undefined) ctx.addIssue({ code: 'custom', message: 'Spielmodi sind nur für Garry’s Mod erlaubt.' });
   if (profile.gameId !== 'gmod' && (profile.collectionId !== undefined || profile.map !== undefined)) ctx.addIssue({ code: 'custom', message: 'Workshop-Collection und Karte sind nur für Garry’s Mod erlaubt.' });
   if (!['valheim', 'terraria', 'factorio'].includes(profile.gameId) && profile.worldName !== undefined) ctx.addIssue({ code: 'custom', message: 'Ein Weltname ist nur für Valheim, Terraria oder Factorio erlaubt.' });
-  if (['valheim', 'factorio'].includes(profile.gameId) && !profile.serverPassword) ctx.addIssue({ code: 'custom', message: 'Dieses Spiel benötigt ein Serverpasswort mit mindestens 8 Zeichen.' });
-  if (!['valheim', 'factorio'].includes(profile.gameId) && profile.serverPassword !== undefined) ctx.addIssue({ code: 'custom', message: 'Serverpasswörter werden hier nur für Valheim und Factorio unterstützt.' });
-  if (profile.gameId !== 'squad' && (profile.queryPort !== undefined || profile.beaconPort !== undefined)) ctx.addIssue({ code: 'custom', message: 'Query- und Beacon-Port sind nur für Squad erlaubt.' });
-  if (['gmod', 'squad', 'valheim'].includes(profile.gameId) && profile.version !== 'latest') ctx.addIssue({ code: 'custom', message: 'Diese Steam-Vorlage installiert die aktuelle Dedicated-Server-Version.' });
+  if (['valheim', 'factorio', 'arma3', 'dayz'].includes(profile.gameId) && !profile.serverPassword) ctx.addIssue({ code: 'custom', message: 'Dieses Spiel benötigt ein Serverpasswort mit mindestens 8 Zeichen.' });
+  if (!['valheim', 'factorio', 'arma3', 'dayz'].includes(profile.gameId) && profile.serverPassword !== undefined) ctx.addIssue({ code: 'custom', message: 'Serverpasswörter werden für dieses Spiel nicht unterstützt.' });
+  if (profile.queryPort !== undefined && !['squad', 'dayz'].includes(profile.gameId)) ctx.addIssue({ code: 'custom', message: 'Query-Port ist nur für Squad und DayZ erlaubt.' });
+  if (profile.beaconPort !== undefined && profile.gameId !== 'squad') ctx.addIssue({ code: 'custom', message: 'Beacon-Port ist nur für Squad erlaubt.' });
+  if (['gmod', 'squad', 'valheim', 'arma3', 'dayz'].includes(profile.gameId) && profile.version !== 'latest') ctx.addIssue({ code: 'custom', message: 'Diese Steam-Vorlage installiert die aktuelle Dedicated-Server-Version.' });
+  if (profile.gameId === 'arma3' && profile.mission !== undefined && !['MP_COOP_m01.Stratis', 'MP_COOP_m03.Altis', 'MP_ZGM_m11.Altis', 'MP_ZGM_m12.Stratis', 'MP_CombatPatrol_01.Altis'].includes(profile.mission)) ctx.addIssue({ code: 'custom', message: 'Diese Arma-Mission ist nicht freigegeben.' });
+  if (profile.gameId === 'dayz' && profile.mission !== undefined && profile.mission !== 'dayzOffline.chernarusplus') ctx.addIssue({ code: 'custom', message: 'Diese DayZ-Vorlage unterstützt Chernarus.' });
+  if (!['arma3', 'dayz'].includes(profile.gameId) && (profile.mission !== undefined || profile.workshopIds !== undefined)) ctx.addIssue({ code: 'custom', message: 'Missionen und Workshop-Listen sind hier nur für Arma 3 und DayZ erlaubt.' });
+  if (profile.gameId !== 'arma3' && profile.adminSteamIds !== undefined) ctx.addIssue({ code: 'custom', message: 'Die Steam-Adminliste ist hier nur für Arma 3 erlaubt.' });
   if (profile.gameId === 'terraria' && profile.version !== '1.4.5.8') ctx.addIssue({ code: 'custom', message: 'Diese Terraria-Vorlage unterstützt Version 1.4.5.8.' });
   if (profile.gameId === 'factorio' && profile.version !== '2.1.24') ctx.addIssue({ code: 'custom', message: 'Diese Factorio-Vorlage unterstützt Version 2.1.24.' });
   if (profile.gameId !== 'minecraft' && (profile.modpackId || profile.modpackVersion)) ctx.addIssue({ code: 'custom', message: 'Minecraft-Modpacks sind nur für Minecraft erlaubt.' });

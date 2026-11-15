@@ -17,6 +17,13 @@ const server = instance.app.listen(instance.config.port, instance.config.host, (
 server.requestTimeout = 20000;
 server.headersTimeout = 10000;
 server.keepAliveTimeout = 5000;
-const shutdown = () => { server.close(async () => { await instance.close(); process.exit(0); }); };
+let stopping = false;
+const shutdown = () => {
+  if (stopping) return; stopping = true;
+  // Close authenticated event streams and the private setup connection before
+  // waiting for HTTP shutdown; an SSE stream must not hold this process open.
+  const closing = instance.close();
+  server.close(async () => { await closing; process.exit(0); });
+};
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);

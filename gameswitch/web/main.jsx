@@ -82,6 +82,8 @@ const gameNames = {
   valheim: "Valheim",
   terraria: "Terraria",
   factorio: "Factorio",
+  arma3: "Arma 3",
+  dayz: "DayZ",
   fs25: "Farming Simulator 25",
 };
 const gameName = (id) => gameNames[id] || id;
@@ -93,6 +95,8 @@ const gameLetter = (id) =>
     valheim: "V",
     terraria: "T",
     factorio: "F",
+    arma3: "A3",
+    dayz: "DZ",
     fs25: "FS25",
   })[id] || "?";
 const defaultGameVersion = (game) =>
@@ -119,11 +123,66 @@ const gameCapabilities = (gameId, catalog = []) =>
         gmod: "ulx",
         valheim: "valheim",
         squad: "squad",
+        arma3: "arma3",
       }[gameId] || "none",
   };
 const isMinecraft = (profile) => profile?.gameId === "minecraft";
 const defaultGamePlayers = (game) =>
-  Math.min(game?.id === "factorio" ? 16 : 20, game?.maxPlayers || 128);
+  Math.min(
+    game?.defaultPlayers || (game?.id === "factorio" ? 16 : game?.id === "arma3" ? 10 : 20),
+    game?.maxPlayers || 128,
+  );
+const bohemiaGame = (id) => ["arma3", "dayz"].includes(id);
+const bohemiaMissions = {
+  arma3: [
+    ["MP_COOP_m01.Stratis", "Escape From Stratis · Koop"],
+    ["MP_COOP_m03.Altis", "Escape From Altis · Koop"],
+    ["MP_ZGM_m11.Altis", "Zeus · Altis"],
+    ["MP_ZGM_m12.Stratis", "Zeus · Stratis"],
+    ["MP_CombatPatrol_01.Altis", "Combat Patrol · Altis"],
+  ],
+  dayz: [["dayzOffline.chernarusplus", "Chernarus · Vanilla Survival"]],
+};
+const defaultGameMission = (game) =>
+  game?.defaultMission || bohemiaMissions[game?.id]?.[0]?.[0] || "";
+const missionName = (gameId, mission) =>
+  bohemiaMissions[gameId]?.find(([id]) => id === mission)?.[1] || mission;
+const parseIdList = (input, { steam = false } = {}) => {
+  const values = input.trim() ? input.trim().split(/[\s,]+/u) : [];
+  const maximum = steam ? 20 : 30;
+  const pattern = steam ? /^[0-9]{17}$/ : /^[1-9][0-9]{4,19}$/;
+  if (values.length > maximum || values.some((value) => !pattern.test(value)))
+    throw new Error(
+      steam
+        ? "Bitte höchstens 20 SteamID64 mit je 17 Ziffern eingeben, getrennt durch Komma oder Zeilenumbruch."
+        : "Bitte höchstens 30 numerische Workshop-IDs eingeben, getrennt durch Komma oder Zeilenumbruch.",
+    );
+  return [...new Set(values)];
+};
+const profileCapabilities = (profile, state) => {
+  const game = gameCapabilities(profile.gameId, state?.catalog);
+  if (!bohemiaGame(profile.gameId) || state?.mode === "sandbox") return game;
+  const setup = state?.runtimeSetup?.[profile.gameId];
+  const preparedMods = Array.isArray(setup?.workshopIds) ? setup.workshopIds : [];
+  const selectedMods = Array.isArray(profile.workshopIds) ? profile.workshopIds : [];
+  const missingMods = selectedMods.filter(
+    (id) => !preparedMods.includes(id),
+  );
+  const setupRequired = setup?.ready !== true || missingMods.length > 0;
+  return {
+    ...game,
+    setupRequired,
+    setupReason: setup?.ready !== true
+      ? setup?.reason || "Steam-Einrichtung wird vor dem ersten Start benötigt."
+      : `${missingMods.length} ausgewählte Workshop-Mods müssen auf dem Host vorbereitet werden.`,
+  };
+};
+const libraryCommand = (gameId, workshopIds = []) => {
+  const ids = (Array.isArray(workshopIds) ? workshopIds : []).filter(
+    (id) => typeof id === "string" && /^[1-9][0-9]{4,19}$/.test(id),
+  );
+  return `sudo gameswitch-steam-library prepare ${gameId}${ids.length ? ` --workshop ${ids.join(",")}` : ""}`;
+};
 const date = (value) =>
   value
     ? new Intl.DateTimeFormat("de-DE", {
@@ -228,6 +287,7 @@ function App() {
   const [query, setQuery] = useState("");
   const [consoleProfile, setConsoleProfile] = useState(null);
   const [consoleLines, setConsoleLines] = useState([]);
+  const [steamSetup, setSteamSetup] = useState(null);
   const mutationInFlight = useRef(false);
   const refresh = async () => {
     try {
@@ -293,7 +353,8 @@ function App() {
       busy ||
       runningJob ||
       profile.status !== "running" ||
-      gameCapabilities(profile.gameId, state?.catalog).available === false
+      profileCapabilities(profile, state).available === false ||
+      profileCapabilities(profile, state).setupRequired
     )
       return;
     setError("");
@@ -457,6 +518,14 @@ function App() {
             </strong>
           </div>
           <div className="topbar-right">
+            <button
+              className="button subtle steam-topbar-button"
+              onClick={() => setSteamSetup({ gameId: "arma3", workshopIds: [] })}
+              aria-label="Steam einrichten"
+              title="Steam einrichten"
+            >
+              <Gamepad2 size={16} /><span>Steam einrichten</span>
+            </button>
             <span className={`mode-pill ${sandbox ? "sandbox" : ""}`}>
               <span className="status-dot" />
               {sandbox ? "Sandbox · lokal" : "PufferPanel-Modus"}
@@ -630,8 +699,9 @@ function App() {
                                 disabled={
                                   busy ||
                                   runningJob ||
-                                  gameCapabilities(active.gameId, state.catalog)
+                                  profileCapabilities(active, state)
                                     .available === false ||
+                                  profileCapabilities(active, state).setupRequired ||
                                   active.status !== "running"
                                 }
                                 onClick={() => requestRestart(active)}
@@ -759,10 +829,7 @@ function App() {
                               profile.status === "running"
                             }
                             sandbox={sandbox}
-                            game={gameCapabilities(
-                              profile.gameId,
-                              state.catalog,
-                            )}
+                            game={profileCapabilities(profile, state)}
                             disabled={busy || runningJob}
                             onActivate={() =>
                               setModal({ type: "activate", profile })
@@ -772,6 +839,7 @@ function App() {
                             onBackup={() =>
                               setModal({ type: "backup", profile })
                             }
+                            onSteamSetup={() => setSteamSetup({ gameId: profile.gameId, workshopIds: profile.workshopIds || [] })}
                           />
                         ))}
                       <button
@@ -890,7 +958,7 @@ function App() {
                 </section>
               )}
               {tab === "security" && (
-                <Security state={state} sandbox={sandbox} />
+                <Security state={state} sandbox={sandbox} onSteamSetup={() => setSteamSetup({ gameId: "arma3", workshopIds: [] })} />
               )}
             </>
           )}
@@ -908,22 +976,31 @@ function App() {
       </div>
 
       {modal?.type === "create" && (
+        <div hidden={Boolean(steamSetup)}>
         <CreateProfile
           catalog={state?.catalog || []}
           host={state?.host}
+          runtimeSetup={state?.runtimeSetup}
+          sandbox={sandbox}
           initialGameId={modal.gameId}
+          onSteamSetup={(gameId, workshopIds) => setSteamSetup({ gameId, workshopIds })}
           onClose={() => setModal(null)}
           onUnauthorized={() => {
             csrfToken = "";
             setModal(null);
             setSession({ authenticated: false });
           }}
-          onCreated={async () => {
+          onCreated={async (profile) => {
             setModal(null);
-            setNotice("Spielprofil angelegt. Du kannst es jetzt starten.");
+            setNotice(
+              bohemiaGame(profile?.gameId)
+                ? "Spielprofil angelegt. Vor der ersten Installation die Steam-Einrichtung prüfen."
+                : "Spielprofil angelegt. Du kannst es jetzt starten.",
+            );
             await refresh();
           }}
         />
+        </div>
       )}
       {modal && modal.type !== "create" && (
         <ConfirmModal
@@ -933,6 +1010,8 @@ function App() {
           sandbox={sandbox}
           busy={busy}
           runningJob={runningJob}
+          catalog={state?.catalog}
+          runtimeSetup={state?.runtimeSetup}
           error={error}
           onClose={() => setModal(null)}
           onConfirm={() =>
@@ -1015,7 +1094,199 @@ function App() {
           </div>
         </Modal>
       )}
+      {steamSetup && (
+        <SteamSetup
+          initialGameId={steamSetup.gameId}
+          initialWorkshopIds={steamSetup.workshopIds}
+          locked={busy || runningJob}
+          onClose={() => setSteamSetup(null)}
+          onComplete={refresh}
+          onUnauthorized={() => {
+            csrfToken = "";
+            setSteamSetup(null);
+            setSession({ authenticated: false });
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+const steamSessionFinished = (session) =>
+  ["completed", "finished", "failed", "cancelled", "ended"].includes(session?.state);
+const steamConsoleText = (value) => value
+  .replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, "")
+  .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+  .replace(/\r\n/g, "\n")
+  .replace(/\r/g, "\n")
+  .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, "");
+
+function SteamSetup({ initialGameId, initialWorkshopIds = [], locked, onClose, onComplete, onUnauthorized }) {
+  const [gameId, setGameId] = useState(bohemiaGame(initialGameId) ? initialGameId : "arma3");
+  const [workshopText, setWorkshopText] = useState(Array.isArray(initialWorkshopIds) ? initialWorkshopIds.join(",") : "");
+  const [status, setStatus] = useState(null);
+  const [session, setSession] = useState(null);
+  const [input, setInput] = useState("");
+  const [output, setOutput] = useState("");
+  const [error, setError] = useState("");
+  const [pending, setPending] = useState("");
+  const [connection, setConnection] = useState("idle");
+  const [cancelConfirm, setCancelConfirm] = useState(false);
+  const [streamVersion, setStreamVersion] = useState(0);
+  const operation = useRef(false);
+  const terminal = useRef(null);
+  const rawOutput = useRef("");
+  const decoder = useRef(new TextDecoder());
+  const active = Boolean(session?.id && !steamSessionFinished(session));
+  const fail = (e) => {
+    if (e.status === 401) onUnauthorized();
+    else setError(e.message || "Die Steam-Einrichtung konnte nicht erreicht werden.");
+  };
+  const adoptStatus = (result) => {
+    setStatus(result);
+    if (result.session?.id) {
+      setSession({ ...result.session, state: result.session.state || (result.active ? "running" : "ended") });
+      if (bohemiaGame(result.session.gameId)) setGameId(result.session.gameId);
+      if (Array.isArray(result.session.workshopIds)) setWorkshopText(result.session.workshopIds.join(","));
+    } else if (!result.active) {
+      setSession(current => current && !steamSessionFinished(current) ? { ...current, state: "ended" } : current);
+    }
+  };
+  useEffect(() => {
+    let disposed = false;
+    api("/steam/setup/status").then(result => { if (!disposed) adoptStatus(result); }).catch(e => { if (!disposed) fail(e); });
+    return () => { disposed = true; rawOutput.current = ""; };
+  }, []);
+  useEffect(() => {
+    if (!session?.id || steamSessionFinished(session)) return;
+    let disposed = false;
+    setConnection("connecting");
+    const source = new EventSource(`/api/steam/setup/${encodeURIComponent(session.id)}/events`);
+    source.onopen = () => { if (!disposed) setConnection("connected"); };
+    source.onmessage = (event) => {
+      if (disposed) return;
+      let message;
+      try {
+        message = JSON.parse(event.data);
+        if (!message || typeof message !== "object" || Array.isArray(message)) throw new Error();
+      }
+      catch { setError("Eine Steam-Protokollmeldung konnte nicht gelesen werden."); return; }
+      if (message.type === "output") {
+        if (typeof message.data !== "string" || message.data.length > 131072) return;
+        try {
+          const bytes = Uint8Array.from(atob(message.data), char => char.charCodeAt(0));
+          rawOutput.current = (rawOutput.current + decoder.current.decode(bytes, { stream: true })).slice(-131072);
+          setOutput(steamConsoleText(rawOutput.current).slice(-65536));
+        } catch { setError("Eine Steam-Protokollmeldung konnte nicht gelesen werden."); }
+      } else if (message.type === "exit") {
+        source.close();
+        setConnection("closed");
+        setInput("");
+        setSession(current => current ? { ...current, state: message.code === 0 ? "completed" : "failed" } : current);
+        if (message.code !== 0) setError("Die Steam-Einrichtung wurde angehalten. Die Ausgabe zeigt den letzten Schritt; Eingaben werden nicht automatisch wiederholt.");
+        onComplete();
+      } else if (message.type === "error") {
+        source.close();
+        setConnection("lost");
+        setInput("");
+        setError("Die Steam-Verbindung wurde angehalten. Bitte den Status prüfen, bevor du eine weitere Eingabe sendest.");
+      }
+    };
+    source.onerror = () => {
+      if (disposed) return;
+      source.close();
+      setConnection("lost");
+      setInput("");
+      setError("Die Verbindung zur Steam-Einrichtung ist unterbrochen. Bitte den Status prüfen und erneut verbinden. Keine Eingabe wird automatisch erneut gesendet.");
+    };
+    return () => { disposed = true; source.close(); };
+  }, [session?.id, streamVersion, steamSessionFinished(session)]);
+  useEffect(() => {
+    if (terminal.current) terminal.current.scrollTop = terminal.current.scrollHeight;
+  }, [output]);
+
+  const start = async (event) => {
+    event.preventDefault();
+    if (operation.current || active || locked || status?.enabled !== true) return;
+    let workshopIds;
+    try { workshopIds = parseIdList(workshopText); }
+    catch (e) { setError(e.message); return; }
+    operation.current = true; setPending("start"); setError(""); setInput("");
+    rawOutput.current = ""; decoder.current = new TextDecoder(); setOutput("");
+    try {
+      const result = await api("/steam/setup/start", { method: "POST", body: { gameId, workshopIds } });
+      if (!result.session?.id) throw new Error("Die Steam-Sitzung wurde nicht bestätigt. Bitte den Status prüfen, bevor du erneut startest.");
+      setSession({ ...result.session, state: result.session.state || "running" });
+      setCancelConfirm(false);
+    } catch (e) { fail(e); }
+    finally { operation.current = false; setPending(""); }
+  };
+  const send = async (event) => {
+    event.preventDefault();
+    if (operation.current || !active || connection !== "connected") return;
+    const value = input;
+    setInput("");
+    if (new TextEncoder().encode(value).length > 512 || /[\x00-\x1f\x7f-\x9f\u2028\u2029]/u.test(value)) {
+      setError("Bitte eine einzelne Eingabe mit höchstens 512 Byte senden."); return;
+    }
+    operation.current = true; setPending("input"); setError("");
+    try {
+      await api(`/steam/setup/${encodeURIComponent(session.id)}/input`, { method: "POST", body: { input: value } });
+    } catch (e) {
+      if (e.status === 401) onUnauthorized();
+      else setError("Die Bestätigung der Eingabe fehlt. Sie kann bereits angekommen sein. Bitte die Ausgabe und den Status prüfen; sie wird nicht automatisch erneut gesendet.");
+    } finally { operation.current = false; setPending(""); }
+  };
+  const refreshStatus = async () => {
+    if (operation.current) return;
+    operation.current = true; setPending("status"); setError(""); setInput("");
+    try { adoptStatus(await api("/steam/setup/status")); setStreamVersion(value => value + 1); }
+    catch (e) { fail(e); }
+    finally { operation.current = false; setPending(""); }
+  };
+  const cancel = async () => {
+    if (operation.current || !active) return;
+    operation.current = true; setPending("cancel"); setError(""); setInput(""); setCancelConfirm(false);
+    try { await api(`/steam/setup/${encodeURIComponent(session.id)}/cancel`, { method: "POST", body: {} }); }
+    catch (e) { fail(e); }
+    finally { operation.current = false; setPending(""); }
+  };
+  const close = () => { setInput(""); setOutput(""); rawOutput.current = ""; onClose(); };
+  const complete = ["completed", "finished"].includes(session?.state);
+  return (
+    <Modal title="Steam einrichten" subtitle="Arma 3 und DayZ sicher vorbereiten" wide onClose={close}>
+      <div className="steam-setup-body">
+        <div className="inline-note steam-privacy-note">
+          <LockKeyhole size={18} />
+          <span>Die Anmeldung geht verschlüsselt an deinen VPS und dort an SteamCMD. Die Oberfläche speichert Passwort und Steam Guard nicht. Laufende Spielserver bleiben aktiv.</span>
+        </div>
+        {error && <div className="alert alert-error" role="alert"><TriangleAlert size={17} /><span>{error}</span></div>}
+        {!status && !error && <p className="steam-setup-wait"><LoaderCircle className="spin" size={16} />Steam-Einrichtung wird geprüft …</p>}
+        {status?.enabled === false && <div className="inline-note"><CircleHelp size={17} /><span>{status.reason || "Die Steam-Einrichtung ist auf diesem Host noch nicht verfügbar."}</span></div>}
+        {complete && <div className="alert alert-success" role="status"><CheckCheck size={18} /><span>{gameName(session.gameId)}: Serverdateien vorbereitet. Die Spielprofile können ihre Bereitschaft jetzt erneut prüfen.</span></div>}
+        <form onSubmit={start} className="steam-start-form">
+          <div className="form-row">
+            <label>Spiel<select value={gameId} onChange={e => setGameId(e.target.value)} disabled={active || Boolean(pending)}><option value="arma3">Arma 3</option><option value="dayz">DayZ</option></select></label>
+            <label>Workshop-Mod-IDs <span>optional</span><input value={workshopText} onChange={e => setWorkshopText(e.target.value)} disabled={active || Boolean(pending)} maxLength={650} placeholder="z. B. 450814997,463939057" autoComplete="off" /></label>
+          </div>
+          <p className="steam-setup-help">Bis zu 30 einzelne Mod-IDs, in Ladereihenfolge und mit Abhängigkeiten. Ohne IDs wird der unveränderte Server vorbereitet.</p>
+          {!active && <button className="button primary" disabled={Boolean(pending) || locked || status?.enabled !== true}>{pending === "start" ? <LoaderCircle size={16} className="spin" /> : <Gamepad2 size={16} />}Steam-Anmeldung öffnen</button>}
+          {locked && !active && <p className="steam-setup-help">Bitte zuerst die laufende Spielaktion abwarten.</p>}
+        </form>
+        {(session || output) && <>
+          <div className="steam-console-heading"><span><Terminal size={15} />{gameName(session?.gameId || gameId)} · SteamCMD</span><span className={`tag ${complete ? "steam-complete" : ""}`}>{active ? connection === "connected" ? "VERBUNDEN" : "VERBINDUNG PRÜFEN" : complete ? "VORBEREITET" : "BEENDET"}</span></div>
+          <pre ref={terminal} className="steam-terminal" role="log" aria-live="polite" aria-label="Steam-Einrichtungsprotokoll" tabIndex={0}>{output || "Die Steam-Ausgabe erscheint hier. Accountname, Passwort und Steam Guard werden jeweils von SteamCMD angefordert."}</pre>
+          {active && <form onSubmit={send} className="steam-input-form" autoComplete="off">
+            <label htmlFor="steam-private-input">Eingabe für den aktuellen Steam-Dialog</label>
+            <div className="steam-input-row"><input id="steam-private-input" type="password" value={input} onChange={e => setInput(e.target.value)} maxLength={512} autoComplete="off" autoCorrect="off" autoCapitalize="none" spellCheck={false} disabled={Boolean(pending) || connection !== "connected"} placeholder="Accountname, Passwort oder Steam-Guard-Code" /><button className="button primary-soft" disabled={Boolean(pending) || connection !== "connected"}>{pending === "input" ? <LoaderCircle className="spin" size={16} /> : <ArrowRight size={16} />}{input ? "Eingabe senden" : "Enter senden"}</button></div>
+            <small>Alle Eingaben bleiben verdeckt. Folge der aktuellen Steam-Aufforderung. Ein leeres Feld sendet nur Enter; jede Eingabe wird genau einmal übermittelt.</small>
+          </form>}
+        </>}
+        {cancelConfirm && active && <div className="steam-cancel-confirm" role="alert"><p>Die Steam-Einrichtung abbrechen? Laufende Spielserver bleiben aktiv. Bereits vorbereitete Bibliotheken bleiben erhalten.</p><div><button className="button danger-outline" onClick={cancel} disabled={Boolean(pending)}>Einrichtung abbrechen</button><button className="button subtle" onClick={() => setCancelConfirm(false)} disabled={Boolean(pending)}>Weiter anmelden</button></div></div>}
+        <div className="steam-session-actions"><button type="button" className="text-button" onClick={refreshStatus} disabled={Boolean(pending)}><RefreshCw size={14} />{connection === "lost" ? "Status prüfen und verbinden" : "Status aktualisieren"}</button>{active && !cancelConfirm && <button className="text-button steam-cancel-button" onClick={() => setCancelConfirm(true)} disabled={Boolean(pending)}>{pending === "cancel" ? "Abbruch angefordert …" : "Steam-Einrichtung abbrechen"}</button>}</div>
+      </div>
+      <div className="modal-footer"><p><ShieldCheck size={16} />{active ? "Schließen beendet die Einrichtung nicht. Du kannst sie über den Steam-Button wieder öffnen." : "Die Anmeldung kann jederzeit später durchgeführt werden."}</p><button className="button subtle" onClick={close}>Schließen</button></div>
+    </Modal>
   );
 }
 
@@ -1041,8 +1312,8 @@ function ConsoleInput({
   const minecraft = isMinecraft(profile);
   const canInput = game.consoleInput === true;
   const adminKind = game.adminKind || "none";
-  const hasSteamAdmin = ["ulx", "valheim", "squad"].includes(adminKind);
-  const fileAdmin = ["valheim", "squad"].includes(adminKind);
+  const hasSteamAdmin = ["ulx", "valheim", "squad", "arma3"].includes(adminKind);
+  const fileAdmin = ["valheim", "squad", "arma3"].includes(adminKind);
   const unavailable = locked || profile.status !== "running";
   const adminUnavailable =
     locked ||
@@ -1405,7 +1676,22 @@ function ConsoleInput({
           Factorio-Konto.
         </p>
       )}
-      {!canInput && !hasSteamAdmin && (
+      {profile.gameId === "arma3" && (
+        <p className="console-help">
+          Die Serverausgabe ist hier lesbar. In der Administratorliste
+          eingetragene Spieler können sich nach dem nächsten Profilstart im
+          Arma-Chat mit <code>#login</code> als Administrator anmelden. Die
+          Mission bestimmt, welche weiteren Funktionen verfügbar sind.
+        </p>
+      )}
+      {profile.gameId === "dayz" && (
+        <p className="console-help">
+          Die DayZ-Serverausgabe ist hier lesbar. Ingame-Adminmenüs benötigen
+          einen passenden Adminmod und dessen Berechtigungskonfiguration. Eine
+          Steam-ID allein vergibt in Vanilla DayZ keine Administratorrechte.
+        </p>
+      )}
+      {!canInput && !hasSteamAdmin && !bohemiaGame(profile.gameId) && (
         <p className="console-help">
           Für dieses Spiel ist hier nur die Serverausgabe verfügbar.
         </p>
@@ -1568,6 +1854,7 @@ function ProfileCard({
   onConsole,
   onRestart,
   onBackup,
+  onSteamSetup,
 }) {
   const minecraft = isMinecraft(profile);
   return (
@@ -1582,7 +1869,9 @@ function ProfileCard({
               : "Aktiv"
             : profile.status === "unknown"
               ? "Status unbekannt"
-              : "Pausiert"}
+              : game?.setupRequired
+                ? "Steam-Einrichtung"
+                : "Pausiert"}
         </span>
       </div>
       <div className="profile-details">
@@ -1607,7 +1896,7 @@ function ProfileCard({
               ? profile.collectionId
                 ? `Collection #${profile.collectionId}`
                 : profile.map || "Sandbox"
-              : profile.worldName ||
+              : (bohemiaGame(profile.gameId) && missionName(profile.gameId, profile.mission)) || profile.worldName ||
                 (profile.version === "latest"
                   ? "Aktuelle Serverversion"
                   : `Version ${profile.version}`)}
@@ -1631,13 +1920,14 @@ function ProfileCard({
             disabled={
               disabled ||
               profile.status === "unknown" ||
-              game?.available === false
+              game?.available === false ||
+              (!active && game?.setupRequired)
             }
-            title={game?.unavailableReason}
+            title={game?.unavailableReason || (game?.setupRequired ? game.setupReason : undefined)}
             onClick={active ? onConsole : onActivate}
           >
             {active ? <Terminal size={15} /> : <Power size={15} />}
-            {active ? "Konsole öffnen" : "Profil starten"}
+            {active ? "Konsole öffnen" : game?.setupRequired ? "Einrichtung erforderlich" : "Profil starten"}
             {!active && <ArrowRight size={15} />}
           </button>
           <button
@@ -1659,7 +1949,8 @@ function ProfileCard({
               disabled={
                 disabled ||
                 profile.status !== "running" ||
-                game?.available === false
+                game?.available === false ||
+                game?.setupRequired
               }
               onClick={onRestart}
               aria-label={`${profile.name} neu starten`}
@@ -1682,6 +1973,16 @@ function ProfileCard({
         </div>
         {game?.available === false && (
           <p className="console-help">{game.unavailableReason}</p>
+        )}
+        {game?.setupRequired && (
+          <div className="steam-profile-setup" role="status">
+            <p>{game.setupReason}</p>
+            <button className="button primary-soft" type="button" onClick={onSteamSetup} disabled={disabled}>
+              <Gamepad2 size={15} />Steam einrichten
+            </button>
+            <details><summary>Alternative über SSH</summary><code>{libraryCommand(profile.gameId, profile.workshopIds)}</code></details>
+            <p>Danach wird der Start automatisch freigegeben.</p>
+          </div>
         )}
       </div>
     </article>
@@ -1894,7 +2195,7 @@ function Backups({ state, busy, onRestore, onNew }) {
   );
 }
 
-function Security({ state, sandbox }) {
+function Security({ state, sandbox, onSteamSetup }) {
   const protections = [
     [
       "Geschützter Zugriff",
@@ -1976,6 +2277,11 @@ function Security({ state, sandbox }) {
           <span>Freie Shell-Befehle</span>
           <strong>Nicht freigegeben</strong>
         </div>
+        <div className="steam-security-connect">
+          <h3>Steam für deine Spiele</h3>
+          <p>Arma 3 und DayZ vorbereiten und die Steam-Anmeldung bei Bedarf direkt hier durchführen.</p>
+          <button className="button primary-soft" onClick={onSteamSetup}><Gamepad2 size={16} />Steam einrichten</button>
+        </div>
         <div className="system-note">
           <TriangleAlert size={16} />
           <p>
@@ -1999,6 +2305,7 @@ function Security({ state, sandbox }) {
 
 function Modal({ title, subtitle, children, onClose, wide = false }) {
   const ref = useRef(null);
+  const titleId = React.useId();
   useEffect(() => {
     const previous = document.activeElement;
     const focusable = () =>
@@ -2007,6 +2314,8 @@ function Modal({ title, subtitle, children, onClose, wide = false }) {
       );
     focusable()?.[0]?.focus();
     const keydown = (event) => {
+      const visibleDialogs = [...document.querySelectorAll('[role="dialog"]')].filter(dialog => !dialog.closest('[hidden]'));
+      if (visibleDialogs.at(-1) !== ref.current) return;
       if (event.key === "Escape") onClose();
       if (event.key === "Tab") {
         const list = focusable();
@@ -2044,11 +2353,11 @@ function Modal({ title, subtitle, children, onClose, wide = false }) {
         className={`modal ${wide ? "wide" : ""}`}
         role="dialog"
         aria-modal="true"
-        aria-labelledby="modal-title"
+        aria-labelledby={titleId}
       >
         <header className="modal-header">
           <div>
-            <h2 id="modal-title">{title}</h2>
+            <h2 id={titleId}>{title}</h2>
             {subtitle && <p>{subtitle}</p>}
           </div>
           <button
@@ -2072,6 +2381,8 @@ function ConfirmModal({
   sandbox,
   busy,
   runningJob,
+  catalog,
+  runtimeSetup,
   error,
   onClose,
   onConfirm,
@@ -2087,7 +2398,11 @@ function ConfirmModal({
   const restartUnavailable =
     restart &&
     profiles.find((profile) => profile.id === target?.id)?.status !== "running";
-  const confirmDisabled = busy || runningJob || restartUnavailable;
+  const targetSetup = target
+    ? profileCapabilities(target, { catalog, runtimeSetup, mode: sandbox ? "sandbox" : "pufferpanel" })
+    : null;
+  const setupUnavailable = ["activate", "restart"].includes(type) && targetSetup?.setupRequired;
+  const confirmDisabled = busy || runningJob || restartUnavailable || setupUnavailable;
   const title = restore
     ? "Spielstand wiederherstellen?"
     : restart
@@ -2110,6 +2425,12 @@ function ConfirmModal({
           <div className="alert alert-error" role="alert">
             <TriangleAlert size={16} />
             <span>{error}</span>
+          </div>
+        )}
+        {setupUnavailable && (
+          <div className="inline-note" role="status">
+            <LockKeyhole size={17} />
+            <span>{targetSetup.setupReason} Die Steam-Einrichtung muss zuerst auf dem Host abgeschlossen werden.</span>
           </div>
         )}
         <div
@@ -2273,7 +2594,10 @@ function ConfirmModal({
 function CreateProfile({
   catalog,
   host,
+  runtimeSetup,
+  sandbox,
   initialGameId,
+  onSteamSetup,
   onClose,
   onCreated,
   onUnauthorized,
@@ -2309,6 +2633,9 @@ function CreateProfile({
     worldName: "",
     queryPort: initial?.defaultQueryPort || 27165,
     beaconPort: initial?.defaultBeaconPort || 15000,
+    mission: defaultGameMission(initial),
+    workshopIds: "",
+    adminSteamIds: "",
   });
   const [versions, setVersions] = useState([]);
   const [packQuery, setPackQuery] = useState("");
@@ -2445,6 +2772,9 @@ function CreateProfile({
       worldName: "",
       queryPort: next.defaultQueryPort || 27165,
       beaconPort: next.defaultBeaconPort || 15000,
+      mission: defaultGameMission(next),
+      workshopIds: "",
+      adminSteamIds: "",
     }));
   };
   const selectPack = async (pack) => {
@@ -2528,17 +2858,26 @@ function CreateProfile({
         ...(game.id === "gmod"
           ? { collectionId, gamemode: form.gamemode, map: form.map.trim() }
           : {}),
-        ...(["valheim", "factorio"].includes(game.id)
+        ...(["valheim", "factorio", "arma3", "dayz"].includes(game.id)
           ? { serverPassword: form.serverPassword }
+          : {}),
+        ...(bohemiaGame(game.id)
+          ? {
+              mission: form.mission,
+              workshopIds: parseIdList(form.workshopIds),
+              ...(game.id === "arma3"
+                ? { adminSteamIds: parseIdList(form.adminSteamIds, { steam: true }) }
+                : {}),
+            }
           : {}),
         ...(["valheim", "terraria", "factorio"].includes(game.id) &&
         form.worldName.trim()
           ? { worldName: form.worldName.trim() }
           : {}),
-        ...(game.id === "squad"
+        ...(["squad", "dayz"].includes(game.id)
           ? {
-              queryPort: Number(form.queryPort || 27165),
-              beaconPort: Number(form.beaconPort || 15000),
+              queryPort: Number(form.queryPort || (game.id === "dayz" ? 27016 : 27165)),
+              ...(game.id === "squad" ? { beaconPort: Number(form.beaconPort || 15000) } : {}),
             }
           : {}),
       };
@@ -2546,8 +2885,8 @@ function CreateProfile({
         payload.modpackId = form.modpackId;
         payload.modpackVersion = form.modpackVersion;
       }
-      await api("/profiles", { method: "POST", body: payload });
-      await onCreated();
+      const created = await api("/profiles", { method: "POST", body: payload });
+      await onCreated(created.profile);
     } catch (e) {
       if (e.status === 401) onUnauthorized();
       else setError(e.message);
@@ -2639,6 +2978,34 @@ function CreateProfile({
               <div className="inline-note game-notice">
                 <CircleHelp size={17} />
                 <span>{game.notice}</span>
+              </div>
+            )}
+            {bohemiaGame(game?.id) && (
+              <div className="inline-note game-notice steam-setup-note" role="status">
+                <LockKeyhole size={17} />
+                <div>
+                  <strong>
+                    {sandbox
+                      ? "Steam-Einrichtung in der Sandbox simuliert"
+                      : runtimeSetup?.[game.id]?.ready
+                        ? "Serverbibliothek auf dem Host vorbereitet"
+                        : "Steam-Einrichtung vor dem ersten Start erforderlich"}
+                  </strong>
+                  <p>
+                    {sandbox
+                      ? "Die Sandbox prüft die Bedienabläufe; sie installiert keine echten Spielserver."
+                      : runtimeSetup?.[game.id]?.ready
+                        ? "Zusätzliche Workshop-Mods ebenfalls in der Serverbibliothek vorbereiten."
+                        : runtimeSetup?.[game.id]?.reason || "Das Profil kann bereits angelegt werden. Der Start bleibt bis zur Einrichtung gesperrt."}
+                  </p>
+                    <>
+                      <button className="button primary-soft" type="button" onClick={() => {
+                        try { onSteamSetup(game.id, parseIdList(form.workshopIds)); }
+                        catch (e) { setError(e.message); }
+                      }}><Gamepad2 size={15} />Steam einrichten</button>
+                      {!sandbox && <details><summary>Alternative über SSH</summary><code>{libraryCommand(game.id, form.workshopIds.trim().split(/[\s,]+/u))}</code></details>}
+                    </>
+                </div>
               </div>
             )}
             <label>
@@ -2883,6 +3250,94 @@ function CreateProfile({
                 </label>
               </>
             ) : null}
+            {bohemiaGame(game?.id) && (
+              <>
+                <label>
+                  {game.id === "dayz" ? "Welt / Startmission" : "Startmission"}
+                  <select
+                    required
+                    value={form.mission}
+                    onChange={(event) => update("mission", event.target.value)}
+                  >
+                    {(bohemiaMissions[game.id] || []).map(([id, name]) => (
+                      <option key={id} value={id}>{name}</option>
+                    ))}
+                  </select>
+                  <small>
+                    {game.id === "arma3"
+                      ? "Geprüfte Vanilla-Missionen. Die Mission begrenzt zusätzlich die verfügbaren Spielerplätze."
+                      : "Die erste Vorlage unterstützt die Chernarus-Welt des Basisspiels. Welt- und Charakterdaten bleiben diesem Profil zugeordnet."}
+                  </small>
+                </label>
+                <label>
+                  Workshop-Mod-IDs <span className="optional">optional</span>
+                  <textarea
+                    rows={3}
+                    maxLength={700}
+                    value={form.workshopIds}
+                    onChange={(event) => update("workshopIds", event.target.value)}
+                    placeholder="Numerische IDs, getrennt durch Komma oder Zeilenumbruch"
+                    autoComplete="off"
+                    autoCapitalize="none"
+                    spellCheck={false}
+                    aria-describedby="workshop-ids-help"
+                  />
+                  <small id="workshop-ids-help">
+                    Bis zu 30 einzelne Mod-IDs in Ladereihenfolge. Die Mods und
+                    ihre Abhängigkeiten müssen über die geschützte
+                    Steam-Einrichtung vorbereitet sein. Die Mod-Auswahl ändert
+                    die oben ausgewählte Startmission nicht.
+                  </small>
+                </label>
+                {game.id === "arma3" && (
+                  <label>
+                    Administratoren <span className="optional">optional</span>
+                    <textarea
+                      rows={2}
+                      maxLength={400}
+                      value={form.adminSteamIds}
+                      onChange={(event) => update("adminSteamIds", event.target.value)}
+                      placeholder="SteamID64 mit 17 Ziffern, getrennt durch Komma oder Zeilenumbruch"
+                      autoComplete="off"
+                      autoCapitalize="none"
+                      spellCheck={false}
+                    />
+                    <small>
+                      Bis zu 20 SteamID64. Eingetragene Spieler melden sich im
+                      Arma-Chat mit #login als Administrator an. Die Liste lässt
+                      sich später bei gestopptem Profil verwalten.
+                    </small>
+                  </label>
+                )}
+                <label>
+                  Serverpasswort
+                  <input
+                    type="password"
+                    required
+                    minLength={8}
+                    maxLength={64}
+                    pattern={"[A-Za-z0-9_\\-]{8,64}"}
+                    autoComplete="new-password"
+                    value={form.serverPassword}
+                    onChange={(event) => update("serverPassword", event.target.value)}
+                    placeholder="Passwort für den Spielbeitritt"
+                    spellCheck={false}
+                  />
+                  <small>
+                    8–64 Buchstaben, Zahlen, Unterstriche oder Bindestriche.
+                    Dieses Passwort gilt für den Spielbeitritt und wird nach
+                    dem Anlegen nicht im Panel angezeigt.
+                  </small>
+                </label>
+                {game.id === "dayz" && (
+                  <p className="console-help game-version-note">
+                    Ingame-Adminmenüs benötigen einen Adminmod und dessen
+                    Berechtigungskonfiguration. Diese Vorlage vergibt keine
+                    Vanilla-Adminrechte über Steam-ID.
+                  </p>
+                )}
+              </>
+            )}
             {["valheim", "terraria", "factorio"].includes(game?.id) && (
               <>
                 {["terraria", "factorio"].includes(game.id) && (
@@ -2941,7 +3396,7 @@ function CreateProfile({
                 )}
               </>
             )}
-            {game?.id === "squad" && (
+            {["squad", "dayz"].includes(game?.id) && (
               <div className="form-row">
                 <label>
                   Query-Port <span className="optional">optional</span>
@@ -2953,10 +3408,11 @@ function CreateProfile({
                     onChange={(event) =>
                       update("queryPort", event.target.value)
                     }
-                    placeholder="27165"
+                    placeholder={game.id === "dayz" ? "27016" : "27165"}
                   />
+                  {game.id === "dayz" && <small>Separater UDP-Port für den Steam-Serverbrowser.</small>}
                 </label>
-                <label>
+                {game.id === "squad" && <label>
                   Beacon-Port <span className="optional">optional</span>
                   <input
                     type="number"
@@ -2968,7 +3424,7 @@ function CreateProfile({
                     }
                     placeholder="15000"
                   />
-                </label>
+                </label>}
               </div>
             )}
             <div className="resource-section">
@@ -3017,6 +3473,12 @@ function CreateProfile({
                   value={form.port}
                   onChange={(e) => update("port", e.target.value)}
                 />
+                {game?.id === "arma3" && (
+                  <small>Verwendet diesen und die vier folgenden UDP-Ports.</small>
+                )}
+                {game?.id === "dayz" && (
+                  <small>Verwendet diesen und den folgenden UDP-Port sowie den separaten Query-Port.</small>
+                )}
               </label>
               <label>
                 Spielerplätze
@@ -3033,6 +3495,12 @@ function CreateProfile({
                     Bis zu 100 Plätze sind die Obergrenze der Vorlage. Die
                     VPS-Ressourcen garantieren keine Leistung für 100
                     gleichzeitige Spieler.
+                  </small>
+                )}
+                {bohemiaGame(game?.id) && (
+                  <small>
+                    Die Platzanzahl ist eine Konfigurationsgrenze. Mission,
+                    KI und Mods bestimmen die tatsächlich mögliche Auslastung.
                   </small>
                 )}
               </label>

@@ -11,6 +11,8 @@ import { mergeAdminFile } from './game-admin.mjs';
 import { executeLocalRcon } from './rcon-client.mjs';
 import { validateGamePorts } from './game-ports.mjs';
 import { validateRootSteamCache, validateSteamCacheEntries } from './steam-cache.mjs';
+import { requireGameLibrary } from './game-library.mjs';
+import { armaAdminConfig } from './arma.mjs';
 import { upstreamFailure, networkFailure } from './diagnostics.mjs';
 
 export class SandboxRuntime {
@@ -66,6 +68,7 @@ export class SandboxRuntime {
     }
     if (state.running !== false) throw Object.assign(new Error('Für diese Adminliste muss ein gestopptes Profil bestätigt sein.'), { status: 409 });
     state.adminFiles ||= {};
+    if (profile.gameId === 'arma3' && state.adminFiles[action.path] === undefined) state.adminFiles[action.path] = armaAdminConfig(profile.adminSteamIds);
     state.adminFiles[action.path] = mergeAdminFile(action, state.adminFiles[action.path] || '');
     state.lines.push('Sandbox: Adminliste simuliert gespeichert; keine echten Spielrechte verändert.');
     await this.write(profile, state);
@@ -138,22 +141,24 @@ export class PufferRuntime {
     } catch (error) { if (error.status === 404 && !profile.installed) return { running: false, provisioned: false }; throw error; }
   }
   async install(profile) {
+    await requireGameLibrary(this.config, profile);
     let exists = false;
     try { await this.request(this.endpoint(profile)); exists = true; }
     catch (error) { if (error.status !== 404) throw error; }
     if (!exists) {
-      const profileSecrets = ['valheim', 'squad', 'factorio'].includes(profile.gameId) ? await readProfileSecrets(this.config, profile.id) : {};
+      const profileSecrets = ['valheim', 'squad', 'factorio', 'arma3', 'dayz'].includes(profile.gameId) ? await readProfileSecrets(this.config, profile.id) : {};
       await this.request(this.endpoint(profile), { method: 'PUT', body: buildDefinition(profile, { ...this.config, profileSecrets }) });
     }
     await this.status(profile); // Require patched daemon before any installation/start.
     await this.request(`${this.endpoint(profile)}/install?wait=true`, { method: 'POST', timeout: 1800000 });
   }
   async preflight(profile) {
+    await requireGameLibrary(this.config, profile);
     if (!catalog.some(game => game.id === profile.gameId && game.available !== false)) throw Object.assign(new Error('Dieses Spiel ist auf diesem Host nicht verfügbar.'), { status: 400 });
     validateGamePorts(profile, this.config);
-    if (['valheim', 'squad', 'factorio'].includes(profile.gameId)) {
+    if (['valheim', 'squad', 'factorio', 'arma3', 'dayz'].includes(profile.gameId)) {
       const secrets = await readProfileSecrets(this.config, profile.id);
-      if ((['valheim', 'factorio'].includes(profile.gameId) && !secrets.serverPassword) || (profile.gameId === 'squad' && !secrets.rconPassword)) throw Object.assign(new Error('Erforderliche private Spieleinstellungen fehlen. Die laufende Instanz bleibt unverändert.'), { status: 409 });
+      if ((['valheim', 'factorio', 'arma3', 'dayz'].includes(profile.gameId) && !secrets.serverPassword) || (profile.gameId === 'squad' && !secrets.rconPassword)) throw Object.assign(new Error('Erforderliche private Spieleinstellungen fehlen. Die laufende Instanz bleibt unverändert.'), { status: 409 });
     }
   }
   async save(profile) {
@@ -209,7 +214,7 @@ export class PufferRuntime {
     let text = typeof data?.logs === 'string' ? Buffer.from(data.logs, 'base64').toString('utf8') : '';
     const replies = this.commandOutputs.get(profile.id) || [];
     if (replies.length) text += '\n' + replies.join('\n');
-    if (['valheim', 'squad', 'factorio'].includes(profile.gameId)) {
+    if (['valheim', 'squad', 'factorio', 'arma3', 'dayz'].includes(profile.gameId)) {
       const secrets = await readProfileSecrets(this.config, profile.id);
       for (const value of Object.values(secrets)) if (value) text = text.split(value).join('[vertraulich]');
     }

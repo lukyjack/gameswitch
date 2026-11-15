@@ -1,0 +1,45 @@
+[Unit]
+Description=GameSwitch private Steam setup bridge
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=root
+Group=gameswitch
+ExecStart=/usr/bin/python3 -B /usr/local/lib/gameswitch/steam-setup-broker.py
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=45
+KillMode=mixed
+RuntimeDirectory=gameswitch-steam-setup
+RuntimeDirectoryMode=0750
+UMask=0077
+Environment=HOME=/run/gameswitch-steam-setup
+Environment=PYTHONDONTWRITEBYTECODE=1
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX
+ReadWritePaths=/run/gameswitch-steam-setup /var/lib/gameswitch-steam-private /var/lib/gameswitch-libraries
+# Bind the directory, not the file: the app replaces state.json atomically, and
+# the helper must always see the current lifecycle job rather than an old inode.
+ReadOnlyPaths=/var/lib/gameswitch
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER CAP_KILL
+AmbientCapabilities=
+LimitNOFILE=256
+LimitCORE=0
+TasksMax=64
+MemoryMax=256M
+StandardOutput=null
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

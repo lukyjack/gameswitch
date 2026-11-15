@@ -6,7 +6,7 @@ Neue Spiele sind eine Codeänderung durch den Administrator. Die Weboberfläche 
 2. Unter `server/catalog.mjs` den Katalogeintrag und die Eingabevalidierung erweitern. Nur benötigte Felder erlauben; Dateipfade, ausführbare Befehle und fremde Download-URLs bleiben gesperrt.
 3. Unter `server/templates.mjs` die Definition erzeugen. Installations-/Startbefehle sind fest im Code. Docker-Isolation und Ressourcenlimits beibehalten; keine Autostart-/Autorestart-Aktionen außerhalb des Orchestrators. Spielstand, Ports, Stop-Verhalten und Bereitschaftssignal explizit festlegen.
 4. Benötigte Spieleingaben in `web/` ergänzen. Eine Bibliothekskachel allein gilt nicht als Unterstützung. Geheimnisse über `server/profile-secrets.mjs` getrennt speichern und nur Setzkennzeichen zurückgeben; öffentliche Profilfelder explizit freigeben. Alle zusätzlichen Ports unter `server/game-ports.mjs` prüfen.
-5. Adaptertests, erfolgreichen Start, geordnetes Stoppen, Backup, Wiederherstellung und Wechsel auf einem Linux-Testhost nachweisen. Erst danach den Katalogeintrag freischalten.
+5. Adaptertests, erfolgreichen Start, geordnetes Stoppen, Backup, Wiederherstellung und Wechsel auf einem Linux-Testhost nachweisen. Eine vorbereitete Integration kann ein Formular erhalten, muss den Start bis zu ihren noch fehlenden Voraussetzungen ausdrücklich sperren. Ein Katalogeintrag allein bedeutet keine bestätigte Spielbereitschaft; die Prüflage gehört nach `docs/validation.md`.
 
 Die gemeinsame Lebenszyklussteuerung in `server/controller.mjs` und der Laufzeitadapter in `server/runtime.mjs` bleiben die einzigen Wege zum Starten und Stoppen. Ein neues Spiel darf diesen Pfad nicht umgehen.
 
@@ -26,7 +26,28 @@ GMod nutzt die eigene öffentliche oder ungelistete Workshop-Collection. Die ID 
 
 Der Server lädt und mountet die Collection. Je nach Addon sind für Client-Inhalte zusätzlich eine Subscription beziehungsweise `resource.AddWorkshop` erforderlich. Eine Spielebibliothek mit beispielsweise Counter-Strike-Source-Assets zu mounten ist ein separater Schritt mit Lizenz-, SteamCMD- und Dateirechteanforderungen und gehört noch nicht zum MVP. Ein gegebenenfalls benötigter Steam Game Server Login Token wird beim Hosting serverseitig ergänzt und gehört nicht in Chat oder Git.
 
-Der GMod-Adminhelfer setzt ULX und ULib in der Collection voraus. Er übersetzt eine geprüfte SteamID2/SteamID64 in feste `ulx adduserid`-/`ulx removeuserid`-Befehle. Bei neuen Steam-Definitionen ist HOME ein privates Tmpfs; alte `.steam`-Home-Caches werden nur unter den in [security.md](security.md) beschriebenen Stopp- und Strukturprüfungen vorbereitet. Der Archivschutz bleibt streng.
+Der GMod-Adminhelfer setzt ULX und ULib in der Collection voraus. Er übersetzt eine geprüfte SteamID2/SteamID64 in feste `ulx adduserid`-/`ulx removeuserid`-Befehle. Bei neuen GMod-/Valheim-/Squad-Definitionen ist HOME ein privates Tmpfs; alte `.steam`-Home-Caches werden nur unter den in [security.md](security.md) beschriebenen Stopp- und Strukturprüfungen vorbereitet. Arma 3 und DayZ benötigen dagegen dauerhafte Spielprofile und verwenden nur für den verschachtelten Steam-Cache ein Tmpfs. Der Archivschutz bleibt streng.
+
+## Arma 3 und DayZ: vorbereitete Linux-Integration
+
+Beide Spiele stehen im nun neun Einträge umfassenden Katalog als getrennte Profile. Ihre erste native Anmeldung, Installation und Spielbereitschaft sind noch nicht bestätigt. Die Vorlagen kopieren ausschließlich vorab vom Hostadministrator vorbereitete Serverdateien und ausgewählte Mods. `/api/state.runtimeSetup` meldet, welche Bibliothek und Workshop-IDs vorliegen. Fehlt eine Voraussetzung, scheitert die Aktivierung bereits vor Speichern oder Stoppen der laufenden Instanz. Die Sandbox simuliert diesen Zustand ausdrücklich.
+
+Die Erstvorbereitung lässt sich im angemeldeten Panel über „Steam einrichten“ durchführen: Spiel und einzelne Workshop-IDs wählen, Anmeldung öffnen und auf die jeweilige SteamCMD-Aufforderung verdeckt antworten. Der gesonderte lokale Broker startet nur den festen Downloadhelfer; Steam-Zugangsdaten werden weder Profilfeldern noch Spielprozessen übergeben. Ein OpenID-Weblogin allein wäre kein Downloadzugriff. Als SSH-Alternative bleiben `sudo gameswitch-steam-library prepare arma3` beziehungsweise `dayz` und `--workshop ID,ID` erhalten. Die Bibliotheken liegen unter `/var/lib/gameswitch-libraries/<game>` und werden nur lesend als `/gameswitch-library` eingebunden. Details zum Einrichtungsdienst und geschützten Hostzugang stehen in [deployment.md](deployment.md).
+
+| Spiel | Festgelegte Vorlage | Profil und Verwaltung |
+| --- | --- | --- |
+| Arma 3 | Offizielle stabile Linux-Dedicated-App `233780`, Workshop-Inhalte des Spiels `107410`; `arma3server_x64` | Fünf freigegebene Vanilla-Missionen; Standard `MP_COOP_m01.Stratis`. Bis zu 30 einzelne Workshop-Mod-IDs in Ladereihenfolge und bis zu 20 individuelle SteamID64 für Admins. UDP Spielport bis Spielport + 4, Standard 2302–2306. |
+| DayZ | Offizielle stabile Linux-Dedicated-App `223350`, Workshop-Inhalte des Spiels `221100`; `DayZServer` | Zunächst nur `dayzOffline.chernarusplus` (Chernarus). Bis zu 30 einzelne Workshop-Mod-IDs. UDP Spielport und Spielport + 1 sowie separater Steam-Query-Port, standardmäßig 27016. |
+
+Arma erlaubt außerdem `MP_COOP_m03.Altis`, `MP_ZGM_m11.Altis`, `MP_ZGM_m12.Stratis` und `MP_CombatPatrol_01.Altis`. Konfigurierte Spielerplätze können durch die Mission weiter begrenzt sein. Eigene PBOs, DLC-/Custom-Karten, beliebige Startparameter und importierte Launcher-Presets sind nicht Teil dieser ersten Vorlage. Workshop-IDs sind keine Collection-Auflösung; benötigte Abhängigkeiten müssen ebenfalls ausgewählt und vorbereitet werden.
+
+Das notwendige Spielpasswort wird separat privat gespeichert. Die Vorlagen aktivieren BattlEye und `verifySignatures=2`, kopieren echte Moddateien statt Links und übernehmen Signaturschlüssel nur aus den ausgewählten Mods zusätzlich zu den Serverdateien. Das prüft Herkunft/Kompatibilität im Spieleprotokoll, nicht die Harmlosigkeit von Modcode. Steam-Anmelde- und Sitzungsdaten des Hostinstallers werden nicht ins Spielverzeichnis übernommen.
+
+Arma verwendet ein dauerhaftes HOME unter `arma-home`; `.local/share` enthält Spielprofile und missionsabhängige gespeicherte Daten. Der feste eingeschlossene Konfigurationsabschnitt `arma/admins.cfg` wird durch den Adminhelfer nur bei bestätigtem Stopp geändert. Danach können eingetragene Spieler im Spiel `#login` verwenden. DayZ legt Profile und Logs unter `profiles` ab; der Chernarus-Missionsbereich einschließlich Storage bleibt ebenfalls im gesicherten Spielverzeichnis. RPT-/Spielprotokolle bleiben vertraulich. Nur der jeweilige verschachtelte `.steam`-Cache liegt in einem begrenzten Tmpfs; der übrige Profilzustand bleibt dauerhaft.
+
+Das Panel zeigt für beide Spiele lesbare Logs. Der vorhandene Source/TCP-RCON-Client ist keine Arma-/DayZ-Verwaltungsschnittstelle und wird dafür nicht eingesetzt. DayZ besitzt hier keinen nativen Steam-ID-Adminhelfer; Ingame-Adminmenüs benötigen einen vertrauenswürdigen Adminmod und dessen eigene Berechtigungskonfiguration. Beide Vorlagen fordern ein geordnetes Ende per SIGINT an. Dessen tatsächliches Speicherverhalten, der native Bereitschaftsnachweis und ein kompletter Backup-/Restore-Ablauf stehen noch zur Prüfung an.
+
+Primärdokumentation: [Arma 3 Dedicated Server](https://community.bistudio.com/wiki/Arma_3:_Dedicated_Server), [Arma-Serverkonfiguration](https://community.bohemia.net/wiki/Arma_3:_Server_Config_File), [DayZ Linux-Hosting](https://community.bistudio.com/wiki/DayZ:Hosting_a_Linux_Server), [DayZ-Serverkonfiguration](https://community.bistudio.com/wiki/DayZ:Server_Configuration).
 
 ## Weitere freigeschaltete Spiele
 

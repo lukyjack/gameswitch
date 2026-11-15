@@ -4,6 +4,8 @@ Eine deutschsprachige Gameserver-Oberfläche für einen einzelnen VPS: Spiele un
 
 **Entwicklungsstand:** Auf Debian 13 mit Docker und HTTPS eingerichtet, einschließlich der Erweiterung um Valheim, Terraria 1.4.5.8 und Factorio 2.1.24. Diese drei Spiele wurden mit isolierten echten Instanzen geprüft. FTB Evolution 2 wurde mit verbundenen Spielern geprüft; Garry's Mod lädt die konfigurierte Collection einschließlich ULX. Squad bleibt nach einem fehlgeschlagenen nativen Starttest gesperrt; Farming Simulator 25 benötigt eine Windows-/Lizenzanbindung. Der konkrete Prüfumfang steht in [validation.md](gameswitch/docs/validation.md).
 
+Der Katalog enthält jetzt neun Spiele, zusätzlich mit Arma 3 und DayZ. Deren Profilformulare, feste Linux-Vorlagen und Sicherheitsprüfungen sind implementiert. Die erste echte Steam-Anmeldung, Installation und Spielbereitschaft sind noch gesondert nachzuweisen; ein sichtbarer Katalogeintrag ist dafür kein Nachweis. Der Start bleibt bis zur geschützten Vorbereitung der Serverdateien und aller ausgewählten Mods gesperrt.
+
 ## Lokal starten
 
 Voraussetzung: Node.js 24 oder neuer.
@@ -29,10 +31,12 @@ Der gebaute Server läuft standardmäßig unter `http://127.0.0.1:3001`. Konfigu
 - Minecraft-Profile mit auswählbaren Versionen und unterstützten Loadern; Feed-the-Beast- und Modrinth-Modpacks über Suche und konkrete Packversion, einschließlich FTB Evolution 2 aus dem offiziellen FTB-Katalog.
 - Garry's Mod mit Sandbox oder Trouble in Terrorist Town, Steam-Workshop-Collection, Map und ULX-Hilfe für Admin, Superadmin oder Entfernen der direkten Zuweisung per Steam-ID.
 - Valheim mit eigener Welt, getrennt gespeichertem Serverpasswort und Steam-Administratorliste; die Listenpflege benötigt eine gestoppte Instanz. Terraria 1.4.5.8 und Factorio 2.1.24 erhalten ebenfalls eigene Welten. Factorio startet mit Basisspiel, privatem IP-Beitritt, Serverpasswort und aktiver Kontoprüfung.
+- Arma 3 mit fünf festen Koop-/Zeus-Missionen, einzelnen Workshop-Mod-IDs, privatem Spielpasswort und Steam-Administratorliste. DayZ ist zunächst auf Chernarus beschränkt, mit Workshop-Mod-IDs und eigenem persistentem Welt-/Charakterstand. Ingame-Adminmenüs in DayZ benötigen einen passenden Adminmod und dessen Konfiguration.
 - Ein aktives von GameSwitch verwaltetes Profil. Wechsel: laufende Instanz geordnet beenden → vollständiges Backup bestätigen → Ziel installieren/starten. Getrennte Serververzeichnisse bewahren die ursprünglichen Welten und Konfigurationen. Zusätzliche manuell gestartete Server außerhalb der verwalteten Profile liegen außerhalb dieser Steuerung.
 - Backup-Liste, Wiederherstellung im gestoppten Zustand mit vorheriger Sicherung, Konsole, Vorgangsfortschritt und Ereignisse.
-- Befehleingabe für Minecraft, Garry's Mod, Terraria und Factorio; Minecraft mit OP-Hilfe. Valheim zeigt die Ausgabe und verwaltet Admins über eine Datei. Befehle benötigen eine angemeldete Administratorsitzung und werden an die Spielschnittstelle gesendet.
+- Befehleingabe für Minecraft, Garry's Mod, Terraria und Factorio; Minecraft mit OP-Hilfe. Valheim und Arma 3 zeigen die Ausgabe und verwalten Admins über eine Datei bei bestätigtem Stopp. Arma-Admins melden sich danach im Spiel mit `#login` an. DayZ bietet hier lesbare Serverlogs. Befehle benötigen eine angemeldete Administratorsitzung und werden an die Spielschnittstelle gesendet.
 - Neustart des aktiven Profils mit ausdrücklicher Bestätigung: Welt speichern, geordnet stoppen, vollständiges Backup abschließen und dasselbe Profil ohne Neuinstallation starten.
+- Geschützte Steam-Einrichtung direkt im Panel: Über „Steam einrichten“ Arma 3 oder DayZ und einzelne Workshop-IDs wählen, SteamCMD-Anmeldung bei Bedarf öffnen und Accountname, Passwort beziehungsweise Steam Guard verdeckt eingeben. Die Anmeldung kann später erfolgen; ohne vorbereitete Bibliothek bleibt der Profilstart gesperrt.
 - Persistente Profile und Jobs; widersprüchliche oder unterbrochene Abläufe brechen kontrolliert ab.
 - Ressourcenbudget passend für 8 vCPU / 16 GB RAM, mit Reserve für Betriebssystem und Panel. Große Modpacks müssen anhand ihrer eigenen Anforderungen dimensioniert werden.
 
@@ -43,6 +47,8 @@ Weitere Spiele werden als geprüfte serverseitige Definitionen hinzugefügt. Bel
 GameSwitch bindet standardmäßig nur an Loopback; im VPS-Betrieb steht ein HTTPS-Reverse-Proxy davor. Anmeldung, scrypt-Passworthashes, begrenzte Loginversuche, HttpOnly-/SameSite-/Secure-Cookies, CSRF-/Origin-Prüfung, Sicherheitsheader und validierte Eingaben gehören zur Anwendung. Zugangsdaten der Laufzeit bleiben auf dem Server. GameSwitch selbst benötigt keinen Docker-Socket. GitHub Actions ist für dieses Repository deaktiviert; Prüfungen laufen lokal oder auf dem VPS.
 
 Spielpasswörter liegen getrennt unter `DATA_DIR/profile-secrets` mit privaten Dateirechten; Profil- und Zustandsantworten enthalten nur Kennzeichen, ob sie gesetzt sind. Ein Neustart des PufferPanel-Dienstes beendet auch verwaltete Spielprozesse. Ein reines Oberflächenupdate darf deshalb nur den GameSwitch-Dienst neu starten.
+
+Arma 3 und DayZ verwenden eine geschützte, schreibgeschützt eingebundene Serverbibliothek. Der Button „Steam einrichten“ öffnet die echte SteamCMD-Anmeldung im angemeldeten HTTPS-Panel; ein Steam-Weblogin über OpenID allein würde keinen Downloadzugriff erteilen. Eingaben werden verdeckt übertragen und von GameSwitch weder gespeichert noch protokolliert. Nur Steams eigener Anmeldecache bleibt im Root-geschützten Hostspeicher, außerhalb der Spielvolumes. Der begrenzte lokale Einrichtungsdienst erhält keinen frei wählbaren Shellbefehl; GameSwitch selbst bleibt ohne Docker-Socket. Die interaktive SSH-CLI `sudo gameswitch-steam-library prepare arma3` beziehungsweise `dayz` mit optionalem `--workshop ID,ID` bleibt eine Alternative. Einrichtung und Prüfgrenzen stehen in [deployment.md](gameswitch/docs/deployment.md).
 
 Fehlgeschlagene Serveraktionen erhalten eine Fehler-ID zur Zuordnung im privaten Dienstjournal. Die Diagnose speichert nur freigegebene Metadaten und feste Fehlerkategorien; Anfrageinhalte, Passwörter und rohe Laufzeitantworten werden nicht übernommen. Details zum administrativen Zugriff stehen in [deployment.md](gameswitch/docs/deployment.md).
 

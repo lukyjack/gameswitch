@@ -16,13 +16,15 @@ import { validateGamePorts } from './game-ports.mjs';
 import { writeProfileSecrets } from './profile-secrets.mjs';
 import { buildAdminAction } from './game-admin.mjs';
 import { createDiagnostics, validCorrelationId, friendlyDiagnosticMessage } from './diagnostics.mjs';
+import { gameLibraryStatus } from './game-library.mjs';
+import { SteamSetup } from './steam-setup.mjs';
 
 const token = () => randomBytes(32).toString('base64url');
 const digest = value => createHash('sha256').update(value).digest('hex');
 const hashPassword = (password, salt) => scryptSync(password, salt, 64, { N: 32768, maxmem: 64 * 1024 * 1024 }).toString('hex');
 const credentials = z.object({ username: z.string().regex(/^[a-zA-Z0-9_-]{3,32}$/), password: z.string().min(14).max(128) }).strict();
 const asyncRoute = callback => (req, res, next) => Promise.resolve(callback(req, res, next)).catch(next);
-const profileFields = ['id', 'name', 'gameId', 'version', 'loader', 'modpackId', 'modpackVersion', 'modpackName', 'modpackVersionName', 'javaVersion', 'minimumMemoryMb', 'recommendedMemoryMb', 'collectionId', 'gamemode', 'map', 'maxPlayers', 'memoryMb', 'port', 'queryPort', 'beaconPort', 'worldName', 'serverId', 'installed', 'status', 'createdAt', 'serverPasswordSet', 'rconPasswordSet'];
+const profileFields = ['id', 'name', 'gameId', 'version', 'loader', 'modpackId', 'modpackVersion', 'modpackName', 'modpackVersionName', 'javaVersion', 'minimumMemoryMb', 'recommendedMemoryMb', 'collectionId', 'gamemode', 'map', 'mission', 'workshopIds', 'adminSteamIds', 'maxPlayers', 'memoryMb', 'port', 'queryPort', 'beaconPort', 'worldName', 'serverId', 'installed', 'status', 'createdAt', 'serverPasswordSet', 'rconPasswordSet'];
 const publicProfile = profile => ({
   ...Object.fromEntries(profileFields.filter(key => profile[key] !== undefined).map(key => [key, profile[key]])),
   consoleInput: catalog.find(game => game.id === profile.gameId)?.consoleInput ?? profile.gameId === 'minecraft',
@@ -35,9 +37,12 @@ export async function createApp(options = {}) {
   const runtime = options.runtime || (config.mode === 'pufferpanel' ? new PufferRuntime(config, options.fetcher) : new SandboxRuntime(config));
   const diagnostics = options.diagnostics || createDiagnostics();
   const controller = new Controller(store, runtime, diagnostics);
+  const steamSetup = options.steamSetup || new SteamSetup(config);
   const catalogProvider = options.providers || providers(options.fetcher);
   const bootstrapToken = store.state.admin ? null : token();
   const sessions = new Map();
+  const steamStreams = new Set();
+  const closeSteamStreams = () => { for (const close of [...steamStreams]) close(); };
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', config.trustLoopbackProxy ? 'loopback' : false);
@@ -68,6 +73,7 @@ export async function createApp(options = {}) {
   app.use('/api', rateLimit({ windowMs: 60000, limit: 240, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'Zu viele Anfragen. Bitte kurz warten.' } }));
   const authLimit = rateLimit({ windowMs: 15 * 60000, limit: 12, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'Zu viele Anmeldeversuche. Bitte 15 Minuten warten.' } });
   const consoleLimit = rateLimit({ windowMs: 60000, limit: 30, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'Zu viele Konsolenbefehle. Bitte kurz warten.' } });
+  const steamCancelLimit = rateLimit({ windowMs: 60000, limit: 20, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'Zu viele Abbruchanfragen. Bitte kurz warten.' } });
   const getSession = req => {
     const cookie = (req.headers.cookie || '').split(';').map(part => part.trim()).find(part => part.startsWith('gameswitch_session='));
     const raw = cookie?.slice('gameswitch_session='.length);
@@ -79,6 +85,7 @@ export async function createApp(options = {}) {
   const sessionResponse = session => ({ authenticated: Boolean(session), setupRequired: !store.state.admin, mode: config.mode, ...(session ? { csrfToken: session.csrfToken, username: session.username } : {}) });
   const makeSession = (res, username) => {
     // Bound sessions and expire all previous sessions at each login for the single administrator.
+    closeSteamStreams();
     sessions.clear();
     const raw = token();
     const session = { username, csrfToken: token(), expires: Date.now() + config.sessionHours * 3600000 };
@@ -117,13 +124,68 @@ export async function createApp(options = {}) {
     }
     next();
   });
-  app.post('/api/logout', (req, res) => { sessions.clear(); res.clearCookie('gameswitch_session', { path: '/', httpOnly: true, secure: config.secureCookies, sameSite: 'strict' }); res.json({ ok: true }); });
+  app.post('/api/logout', (req, res) => { closeSteamStreams(); sessions.clear(); res.clearCookie('gameswitch_session', { path: '/', httpOnly: true, secure: config.secureCookies, sameSite: 'strict' }); res.json({ ok: true }); });
+  const steamStartSchema = z.object({ gameId: z.enum(['arma3', 'dayz']), workshopIds: z.array(z.string().regex(/^[1-9][0-9]{4,19}$/)).max(30).refine(ids => new Set(ids).size === ids.length, 'Workshop-IDs dürfen nicht doppelt sein.').default([]) }).strict();
+  const steamInputSchema = z.object({ input: z.string().max(512).refine(input => Buffer.byteLength(input) <= 512 && !/[\x00-\x1f\x7f-\x9f\u2028\u2029]/u.test(input), 'Nur eine Eingabe ohne Zeilenumbruch oder Steuerzeichen mit höchstens 512 UTF-8-Bytes ist erlaubt.') }).strict();
+  const steamId = req => z.string().uuid().parse(req.params.id);
+  app.get('/api/steam/setup/status', asyncRoute(async (req, res) => res.json(await steamSetup.status())));
+  app.post('/api/steam/setup/start', consoleLimit, asyncRoute(async (req, res) => {
+    const input = steamStartSchema.parse(req.body);
+    if (!store.healthy) return failure(Object.assign(new Error('Persistenzfehler'), { diagnosticReason: 'persistence_failed' }), req, res, 503, 'Persistenzfehler. Die Steam-Einrichtung bleibt gesperrt.');
+    if (controller.busy) return res.status(409).json({ error: 'Eine Serveraktion läuft bereits. Bitte deren Abschluss abwarten.' });
+    controller.busy = true;
+    try {
+      store.event(`Steam-Einrichtung für ${input.gameId} angefordert.`);
+      await store.save();
+      res.status(201).json({ session: await steamSetup.start(input) });
+    } finally { controller.busy = false; }
+  }));
+  app.post('/api/steam/setup/:id/input', consoleLimit, asyncRoute(async (req, res) => {
+    const id = steamId(req);
+    const { input } = steamInputSchema.parse(req.body);
+    try { await steamSetup.input(id, input); }
+    catch (error) {
+      if (error.code === 'STEAM_INPUT_UNCERTAIN') return failure(error, req, res, 502, 'Die Zustellung ist unbestätigt. Bitte die Ausgabe prüfen; die Eingabe wird nicht automatisch wiederholt.');
+      throw error;
+    }
+    res.json({ ok: true });
+  }));
+  app.post('/api/steam/setup/:id/cancel', steamCancelLimit, asyncRoute(async (req, res) => {
+    const id = steamId(req); z.object({}).strict().parse(req.body ?? {});
+    await steamSetup.cancel(id); res.json({ ok: true });
+  }));
+  app.get('/api/steam/setup/:id/events', (req, res, next) => {
+    let unsubscribe = () => {}, heartbeat, ended = false;
+    const finish = () => { if (ended) return; ended = true; clearInterval(heartbeat); unsubscribe(); steamStreams.delete(finish); res.end(); };
+    try {
+      const id = steamId(req);
+      if ((req.headers.origin && req.headers.origin !== config.origin) || req.headers['sec-fetch-site'] === 'cross-site') return res.status(403).json({ error: 'Steam-Ausgabe nur von derselben Herkunft abrufbar.' });
+      const session = req.session;
+      const early = [];
+      let initialized = false;
+      const deliver = event => {
+        if (!initialized) { early.push(event); return; }
+        if (ended || getSession(req) !== session || res.writableLength > 131072) return finish();
+        res.write(`data: ${JSON.stringify(event)}\n\n`);
+        if (event.type === 'exit' || event.type === 'error') finish();
+      };
+      unsubscribe = steamSetup.subscribe(id, deliver);
+      res.status(200).set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' });
+      res.flushHeaders();
+      steamStreams.add(finish);
+      heartbeat = setInterval(() => { if (getSession(req) !== session) return finish(); res.write(': keepalive\n\n'); }, 10000);
+      heartbeat.unref(); req.on('close', finish);
+      initialized = true;
+      for (const event of early) deliver(event);
+    } catch (error) { clearInterval(heartbeat); unsubscribe(); next(error); }
+  });
   app.get('/api/state', asyncRoute(async (req, res) => {
     if (!controller.busy) {
       try { await controller.reconcile(); } catch { /* Unknown state is displayed; mutation still fails closed. */ }
     }
     const { profiles, activeProfileId, job, backups, events } = store.state;
-    res.json({ mode: config.mode, profiles: profiles.map(publicProfile), activeProfileId, job, backups, events, catalog,
+    const [arma3, dayz] = await Promise.all(['arma3', 'dayz'].map(id => gameLibraryStatus(config, id)));
+    res.json({ mode: config.mode, profiles: profiles.map(publicProfile), activeProfileId, job, backups, events, catalog, runtimeSetup: { arma3, dayz },
       host: { name: config.mode === 'sandbox' ? 'Lokale Sandbox · VPS-Zielkonfiguration' : 'Netcup VPS', cpuCores: config.cpuCores, memoryMb: config.memoryMb, reservedMemoryMb: config.reservedMemoryMb },
       security: { authenticated: true, csrf: true, localOnly: ['127.0.0.1', '::1', 'localhost'].includes(config.host) } });
   }));
@@ -165,12 +227,17 @@ export async function createApp(options = {}) {
     store.state.profiles.push(profile); store.event(`Profil „${profile.name}“ angelegt.`); await store.save();
     res.status(201).json({ profile: publicProfile(profile) });
   }));
-  for (const action of ['activate', 'restart', 'stop', 'backup']) app.post(`/api/profiles/:id/${action}`, (req, res, next) => { try { if (action === 'restart') z.object({}).strict().parse(req.body ?? {}); res.status(202).json({ job: controller.begin(action, req.params.id, undefined, { requestId: req.requestId }) }); } catch (error) { next(error); } });
-  app.post('/api/backups/:id/restore', (req, res, next) => {
+  for (const action of ['activate', 'restart', 'stop', 'backup']) app.post(`/api/profiles/:id/${action}`, asyncRoute(async (req, res) => {
+    if ((await steamSetup.status()).active) return res.status(409).json({ error: 'Steam-Einrichtung läuft. Vor einer Serveraktion deren Abschluss abwarten oder die Einrichtung abbrechen.' });
+    if (action === 'restart') z.object({}).strict().parse(req.body ?? {});
+    res.status(202).json({ job: controller.begin(action, req.params.id, undefined, { requestId: req.requestId }) });
+  }));
+  app.post('/api/backups/:id/restore', asyncRoute(async (req, res) => {
+    if ((await steamSetup.status()).active) return res.status(409).json({ error: 'Steam-Einrichtung läuft. Vor einer Wiederherstellung deren Abschluss abwarten oder die Einrichtung abbrechen.' });
     const backup = store.state.backups.find(item => item.id === req.params.id);
     if (!backup) return res.status(404).json({ error: 'Sicherung nicht gefunden.' });
-    try { res.status(202).json({ job: controller.begin('restore', backup.profileId, backup.id, { requestId: req.requestId }) }); } catch (error) { next(error); }
-  });
+    res.status(202).json({ job: controller.begin('restore', backup.profileId, backup.id, { requestId: req.requestId }) });
+  }));
   app.get('/api/profiles/:id/console', asyncRoute(async (req, res) => res.json({ lines: await runtime.console(controller.profile(req.params.id)) })));
   app.post('/api/profiles/:id/console', consoleLimit, asyncRoute(async (req, res) => {
     if (!store.healthy) return failure(Object.assign(new Error('Persistence unavailable'), { code: 'PERSISTENCE_UNAVAILABLE' }), req, res, 503, 'Persistenzfehler. Konsoleneingabe ist bis zur Behebung gesperrt.');
@@ -229,5 +296,7 @@ export async function createApp(options = {}) {
     if (status >= 500) return failure(error, req, res, status, message);
     res.status(status).json({ error: message });
   });
-  return { app, config, store, runtime, controller, bootstrapToken, close: async () => { await controller.pending; await store.flush(); sessions.clear(); } };
+  let closing;
+  const close = () => closing ||= (async () => { closeSteamStreams(); await steamSetup.close(); await controller.pending; await store.flush(); sessions.clear(); })();
+  return { app, config, store, runtime, controller, steamSetup, bootstrapToken, close };
 }

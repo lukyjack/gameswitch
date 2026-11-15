@@ -8,7 +8,7 @@ Diese Anleitung beschreibt den Betrieb auf einem einzelnen VPS. Die konkrete Zie
 - PufferPanel aus **diesem Fork** auf Loopback, Docker für Spiele. Die neue Backup-Schnittstelle ist Voraussetzung.
 - GameSwitch als eigener Systembenutzer ohne Docker-Rechte, nur auf `127.0.0.1:3001`.
 - HTTPS-Reverse-Proxy vor GameSwitch; Verwaltung bevorzugt zusätzlich auf VPN beschränken.
-- Nur benötigte Spielports veröffentlichen: typischerweise Minecraft TCP 25565, GMod TCP/UDP 27015. Die tatsächlichen Profilports sind maßgeblich. PufferPanel 8080 und SFTP 5657 bleiben administrativ erreichbar.
+- Nur benötigte Spielports veröffentlichen: typischerweise Minecraft TCP 25565, GMod TCP/UDP 27015. Arma 3 verwendet fünf aufeinanderfolgende UDP-Ports, standardmäßig 2302–2306; DayZ verwendet UDP Spielport und Spielport + 1 sowie den separaten Query-Port, standardmäßig 27016. Die tatsächlichen Profilports sind maßgeblich. PufferPanel 8080 und SFTP 5657 bleiben administrativ erreichbar.
 
 ## GameSwitch bauen
 
@@ -57,6 +57,52 @@ Beispiel-Service: [gameswitch.service](../deploy/gameswitch.service). Er setzt `
 Für eine öffentliche IP ohne Domain steht [Caddyfile.ip.example](../deploy/Caddyfile.ip.example) bereit. Mit der geprüften Caddy-Version 2.11.9 wird ein öffentlich vertrauenswürdiges Let's-Encrypt-IP-Zertifikat im `shortlived`-Profil angefordert und automatisch erneuert. Das Caddy-Datenverzeichnis muss dauerhaft erhalten bleiben; HTTPS/ACME über Port 80/443 erreichbar halten. Im GameSwitch-Dienst dann die echte HTTPS-Origin setzen, `ALLOW_LOOPBACK_HTTP_OVER_SSH` entfernen und `TRUST_LOOPBACK_PROXY=true` nur für den vorgeschalteten lokalen Proxy setzen. Backend und PufferPanel bleiben an Loopback gebunden.
 
 Beim ersten Produktionsstart schreibt der Dienst den Einrichtungstoken in `DATA_DIR/setup-token` mit privaten Dateirechten. In der Entwicklung steht er im lokalen Terminal. Nur als Administrator auslesen, das Konto einrichten und den Token vertraulich behandeln. Der interne PufferPanel-Administrator und sein OAuth-Client werden mit [bootstrap-puffer.mjs](../deploy/bootstrap-puffer.mjs) eingerichtet; die gepatchte CLI nimmt das Passwort ausschließlich über `--password-stdin` entgegen. Diese internen Zugangsdaten erscheinen nicht in Prozessargumenten oder Ausgabe. Sitzungen sind pro Prozess; ein Neustart meldet Browser ab. Ein einzelner GameSwitch-Prozess verwaltet ein Datenverzeichnis; mehrere parallele Instanzen mit denselben Dateien werden nicht unterstützt.
+
+## Steam-Einrichtung im Panel aktivieren
+
+Für den Button „Steam einrichten“ wird zusätzlich zum unprivilegierten GameSwitch-Prozess der begrenzte lokale Broker benötigt. Er ist kein öffentlich erreichbares Terminal und öffnet keinen TCP-Port. Er startet ausschließlich den festen Steam-Bibliothekshelfer für Arma 3 oder DayZ. Der Appbenutzer erhält keine Docker-Rechte und keine allgemeine `sudo`-Freigabe.
+
+Die Dateien aus dem geprüften Checkout als Hostadministrator installieren; der separate Benutzer und die Gruppe `gameswitch` müssen bereits vorhanden sein:
+
+```sh
+sudo install -d -o root -g root -m 0755 /usr/local/lib/gameswitch /var/lib/gameswitch-libraries
+sudo install -d -o root -g root -m 0700 /var/lib/gameswitch-steam-private
+sudo install -o root -g root -m 0755 deploy/steam-library.py /usr/local/bin/gameswitch-steam-library
+sudo install -o root -g root -m 0644 deploy/steam-setup-broker.py /usr/local/lib/gameswitch/steam-setup-broker.py
+sudo install -o root -g root -m 0644 deploy/gameswitch-steam-setup.service /etc/systemd/system/gameswitch-steam-setup.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now gameswitch-steam-setup.service
+sudo systemctl is-active gameswitch-steam-setup.service
+```
+
+Diese Befehle sind aus `/opt/gameswitch/gameswitch` gedacht. Der neue Dienst verwaltet sein Runtime-Verzeichnis und den Socket `/run/gameswitch-steam-setup/control.sock`: `root:gameswitch`, Socket `0660`, Verzeichnis `0750`. Linux-Peercredentials erlauben nur Root oder die UID des vorhandenen Appbenutzers (auf dem Zielhost 988). Das Beispielservice begrenzt Schreibpfade und Fähigkeiten; seine festgelegten Bibliotheks-/Privatverzeichnisse müssen vor dem Start existieren. Der Bibliothekshelfer verwendet nur das kontrollierte lokale offizielle SteamCMD-Image, begrenzte Ressourcen und einen eigenen Downloadcontainer. Kein Docker-Socket wird dem Appprozess oder Spielecontainern gegeben.
+
+Für die aktualisierte Anwendung gegebenenfalls ausschließlich `gameswitch` nach Abschluss laufender Panelaktionen neu starten. **PufferPanel nicht neu starten:** dessen geordneter Dienststopp beendet verwaltete Spiele. Der neue Steam-Einrichtungsdienst erfordert keinen PufferPanel- oder Minecraft-Neustart. Ein Appneustart meldet Browser ab und bricht eine noch laufende Steam-Einrichtung ab; bereits veröffentlichte Bibliotheken bleiben erhalten.
+
+Im angemeldeten HTTPS-Panel über den Header oder „Sicherheit & System“ auf „Steam einrichten“ klicken. Der Button steht auch an Arma-/DayZ-Profilen und in deren Formularen. Spiel und optionale einzelne Workshop-IDs wählen, anschließend „Steam-Anmeldung öffnen“. Der Dialog zeigt die echten SteamCMD-Aufforderungen. Accountname, Passwort und Steam Guard werden jeweils im verdeckten Eingabefeld gesendet; eine leere Eingabe sendet nur Enter. Keine automatische Wiederholung bei unbestätigter Zustellung. Ein Steam-OpenID-Weblogin allein würde nur die Identität bestätigen, aber keine Berechtigung für diese Downloads liefern.
+
+Die Anmeldung darf jederzeit später erfolgen. Ohne begonnene Sitzung wird nichts heruntergeladen. Ein bereits gestarteter Vorgang läuft nach dem Schließen des Dialogs weiter und kann über den Button wieder geöffnet werden. „Steam-Einrichtung abbrechen“ beendet ausschließlich diesen Vorgang. Abmelden entzieht dem Ausgabestream den Zugriff; ein Neustart des Appprozesses oder Verlust seiner Brokerverbindung bricht den eigenen Helfer ab. Die Ausgabe bleibt begrenzt im RAM, Eingaben werden nicht in App-/Browser-Storage, Audit oder Diagnose übernommen. Nur Steams eigener Anmeldecache bleibt im Root-geschützten Hostspeicher.
+
+## Arma 3 und DayZ mit Steam vorbereiten
+
+Die neue Oberfläche kann beide Profile bereits anlegen. Vor ihrem ersten echten Start müssen die benötigten stabilen Linux-Serverdateien über den geschützten Hosthelfer vorbereitet werden. Die erste authentifizierte Installation und native Spielbereitschaft sind im aktuellen Prüfstand noch offen. Bestehende Spiele werden für diese Einrichtung nicht vom Panel gestoppt. Die Vorbereitung benötigt freien Speicher und begrenzte Download-/CPU-Ressourcen; sie ersetzt keinen ausdrücklich angeforderten Spielewechsel.
+
+Die Panel-Einrichtung ist der normale Bedienweg. Alternativ nach Installation des aktuellen Hosthelfers als Serveradministrator über den bereits hostgeprüften SSH-Zugang ausführen:
+
+```sh
+sudo gameswitch-steam-library prepare arma3
+sudo gameswitch-steam-library prepare dayz
+```
+
+Bei dieser Alternative erfolgen Steam-Anmeldung und gegebenenfalls Steam Guard interaktiv im SSH-Terminal. Steam-Zugangsdaten nur in der geschützten Panel-Einrichtung oder den aktuellen SteamCMD-Prompts eingeben, nicht in Chat, Shellbefehle oder normale Profilfelder. Der Helfer hält Steams Anmeldecache in einem gemeinsamen, Root-geschützten HOME; dieses Verzeichnis wird keinem Spielcontainer zugänglich gemacht. Der Steam-Zugang muss für Spiel und ausgewählte Workshop-Inhalte berechtigt sein.
+
+Für einzelne Workshop-Mods den Aufruf um `--workshop ID,ID` ergänzen; dabei die Platzhalter durch die numerischen IDs der gewünschten Inhalte ersetzen. Für Arma 3 gehören die Inhalte zur Workshop-App `107410`, für DayZ zur App `221100`. Auch notwendige Abhängigkeiten explizit vorbereiten und im Profil auswählen. Es gibt in dieser ersten Anbindung keine automatische Collection-Auflösung und keinen Import beliebiger Launcher-Dateien. Serverpakete sind die festen Apps `233780` für Arma 3 und `223350` für DayZ.
+
+Der Helfer veröffentlicht ausschließlich bereinigte Server-/Moddateien und ein Manifest unter `/var/lib/gameswitch-libraries/arma3` beziehungsweise `/var/lib/gameswitch-libraries/dayz`. Diese Bibliotheken müssen Root gehören und dürfen nicht gruppen-/weltbeschreibbar sein. Der Spielcontainer erhält die passende Bibliothek nur lesend und kopiert die benötigten Dateien ins eigene Profil; Anmeldecaches werden nicht übernommen. Der Manifeststatus wird durch `/api/state.runtimeSetup` angezeigt. Ohne sichere Bibliothek oder ohne einen ausgewählten vorbereiteten Mod bleibt der Profilstart gesperrt, serverseitig bereits vor Speichern oder Stoppen der laufenden Instanz. Ein vorbereiteter Dateibestand bestätigt noch keinen erfolgreichen nativen Serverstart.
+
+Arma 3 hält sein HOME einschließlich `.local/share` unter `arma-home` im Spielvolume; die Adminliste liegt im eingeschlossenen `arma/admins.cfg`. Die Datei nur über den Helfer bei bestätigtem Stopp ändern; nach dem nächsten Start können eingetragene Spieler im Spiel `#login` verwenden. DayZ hält Profile und RPT-/Verwaltungslogs unter `profiles`, den Welt-/Charakterzustand im Chernarus-Missionsbereich. Die Spielverzeichnisse gehören zu den vollständigen Backups; nur der verschachtelte `.steam`-Cache wird als Tmpfs ausgenommen. Das Spielpasswort ist zusätzlich im privaten GameSwitch-Geheimnisspeicher abgelegt. Für eine Hostwiederherstellung Panelzustand, Geheimnisspeicher und Bibliotheken berücksichtigen oder die Bibliotheken kontrolliert neu vorbereiten.
+
+Die Serverprotokolle beider Spiele sind im Panel lesbar. Ein BattlEye-RCON-Adapter ist hier nicht freigegeben; der Source/TCP-Adapter für andere Spiele wird nicht dafür verwendet. DayZ-Ingame-Adminmenüs erfordern einen vertrauenswürdigen Adminmod mit separater Berechtigungskonfiguration. Vor Freigabe müssen geordnetes Stoppen, Weltpersistenz und Backup/Restore mit der tatsächlich installierten Spielversion geprüft werden.
 
 ## Fehler-ID im Dienstjournal prüfen
 

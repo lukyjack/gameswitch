@@ -16,10 +16,10 @@ function profile(gameId, patch = {}) {
 }
 
 test('game catalog declares accurate administration/console capabilities and unavailable Windows prerequisite', () => {
-  assert.deepEqual(catalog.map(game => game.id), ['minecraft', 'gmod', 'squad', 'valheim', 'terraria', 'factorio', 'fs25']);
+  assert.deepEqual(catalog.map(game => game.id), ['minecraft', 'gmod', 'arma3', 'dayz', 'squad', 'valheim', 'terraria', 'factorio', 'fs25']);
   for (const game of catalog) {
     assert.equal(typeof game.available, 'boolean'); assert.equal(typeof game.consoleInput, 'boolean');
-    assert.ok(['minecraft', 'ulx', 'valheim', 'squad', 'none'].includes(game.adminKind));
+    assert.ok(['minecraft', 'ulx', 'arma3', 'valheim', 'squad', 'none'].includes(game.adminKind));
   }
   assert.equal(catalog.find(game => game.id === 'valheim').consoleInput, false);
   assert.match(catalog.find(game => game.id === 'squad').notice, /Custom Browser/);

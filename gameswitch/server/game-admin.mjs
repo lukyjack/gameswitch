@@ -21,7 +21,7 @@ export function canonicalSteamId(input) {
 }
 
 export function buildAdminAction(profile, input) {
-  if (!['gmod', 'valheim', 'squad'].includes(profile?.gameId)) invalid('Für dieses Spiel gibt es keinen Steam-Admin-Helfer.');
+  if (!['gmod', 'valheim', 'squad', 'arma3'].includes(profile?.gameId)) invalid('Für dieses Spiel gibt es keinen Steam-Admin-Helfer.');
   const parsed = adminInput.safeParse(input);
   if (!parsed.success) invalid('Erlaubt sind nur Steam-ID und eine gültige Rolle.');
   const { role } = parsed.data;
@@ -32,6 +32,10 @@ export function buildAdminAction(profile, input) {
     notice: 'ULX-Befehl übermittelt. Bitte das Ergebnis in der Konsole prüfen.',
   };
   if (role === 'superadmin') invalid('Dieses Spiel unterstützt hier nur die Rollen Admin und Spieler.');
+  if (profile.gameId === 'arma3') return {
+    kind: 'file', path: 'arma/admins.cfg', identity: steamId64, role,
+    notice: 'Die Adminliste wurde gespeichert. Sie gilt beim nächsten Start; danach im Spiel mit #login anmelden. Es wurde kein Neustart ausgelöst.',
+  };
   if (profile.gameId === 'valheim') return {
     kind: 'file', path: 'saves/adminlist.txt', identity: `Steam_${steamId64}`, role,
     notice: 'Die Adminliste wurde gespeichert. Die Änderung gilt spätestens beim nächsten Start; es wurde kein Neustart ausgelöst.',
@@ -134,6 +138,18 @@ function mergeSquad(file, action) {
 
 export function mergeAdminFile(action, original) {
   if (action?.kind !== 'file' || !['admin', 'user'].includes(action.role)) invalid('Ungültige Admin-Dateiaktion.');
+  if (action.path === 'arma/admins.cfg') {
+    const identity = canonicalSteamId(action.identity).steamId64;
+    if (typeof original !== 'string' || Buffer.byteLength(original) > maximumFileBytes) invalid('Die Arma-Adminliste ist ungültig.');
+    const parsed = /^\s*admins\[\]\s*=\s*\{\s*((?:"[0-9]{17}"\s*(?:,\s*"[0-9]{17}"\s*)*)?)\}\s*;\s*$/.exec(original);
+    if (!parsed) invalid('Die verwaltete Arma-Adminliste enthält unerwartete Einstellungen und wird nicht überschrieben.');
+    const ids = parsed[1].match(/[0-9]{17}/g) || [];
+    ids.forEach(id => canonicalSteamId(id));
+    const result = [...new Set(ids.filter(id => id !== identity))];
+    if (action.role === 'admin') result.push(identity);
+    if (result.length > 20) invalid('Maximal 20 Arma-Administratoren erlaubt.');
+    return `admins[] = {${result.map(id => JSON.stringify(id)).join(',')}};\n`;
+  }
   let merge;
   if (action.path === 'saves/adminlist.txt' && typeof action.identity === 'string' && action.identity.startsWith('Steam_')) {
     if (canonicalSteamId(action.identity.slice(6)).steamId64 !== action.identity.slice(6)) invalid('Ungültige Valheim-Identität.');

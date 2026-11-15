@@ -28,6 +28,7 @@ export function readConfig(env = process.env) {
   return {
     production, host, port, origin: origin.origin, loopbackTunnel, secureCookies: origin.protocol === 'https:', trustLoopbackProxy: env.TRUST_LOOPBACK_PROXY === 'true',
     dataDir: path.resolve(env.DATA_DIR || './data'),
+    gameLibraryDir: path.resolve('/var/lib/gameswitch-libraries'),
     mode: env.RUNTIME_MODE || 'sandbox',
     pufferUrl: pufferUrl?.origin,
     clientId: env.PUFFERPANEL_CLIENT_ID,

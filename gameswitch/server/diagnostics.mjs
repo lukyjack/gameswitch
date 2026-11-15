@@ -8,7 +8,11 @@ const reasons = new Set(['backup_unsafe_links', 'steam_cache_unexpected', 'disk_
 const operations = new Set(['activate', 'restart', 'stop', 'backup', 'restore', 'http', 'request', 'console', 'admin', 'profile-create', 'status', 'setup', 'login', 'logout', 'oauth', 'start', 'install', 'file', 'definition', 'server', 'persistence']);
 const stages = new Set(['request', 'response', 'middleware', 'handler', 'persistence', 'Laufzeit prüfen', 'Spielstand speichern', 'Alte Instanz stoppen', 'Sicherung abschließen', 'Ziel installieren', 'Ziel starten', 'Sicherheitskopie erstellen', 'Sicherung wiederherstellen', 'Instanz stoppen', 'Stopp bestätigen', 'Instanz starten']);
 const games = new Set(['minecraft', 'gmod', 'squad', 'valheim', 'terraria', 'factorio', 'fs25']);
+games.add('arma3'); games.add('dayz');
+reasons.add('steam_library_required'); reasons.add('steam_mods_required');
+codes.add('STEAM_INPUT_UNCERTAIN');
 const trustedFiles = new Set(['app.mjs', 'controller.mjs', 'runtime.mjs', 'diagnostics.mjs', 'store.mjs', 'catalog.mjs', 'templates.mjs', 'game-ports.mjs', 'profile-secrets.mjs', 'game-admin.mjs', 'console-command.mjs', 'rcon-client.mjs', 'steam-cache.mjs', 'minecraft-memory.mjs']);
+trustedFiles.add('steam-setup.mjs');
 const value = (object, key) => { try { return object?.[key]; } catch { return undefined; } };
 
 export const validCorrelationId = input => typeof input === 'string' && uuid.test(input);
@@ -21,7 +25,7 @@ export function safeDiagnosticReason(error) {
   if (['EACCES', 'EPERM', 'EROFS'].includes(code)) return 'permission_denied';
   if (['ETIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT'].includes(code) || ['AbortError', 'TimeoutError'].includes(value(error, 'name'))) return 'network_timeout';
   if (['ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN'].includes(code)) return 'network_unavailable';
-  if (['CONSOLE_DELIVERY_UNCERTAIN', 'ADMIN_WRITE_UNCERTAIN'].includes(code)) return 'delivery_uncertain';
+  if (['CONSOLE_DELIVERY_UNCERTAIN', 'ADMIN_WRITE_UNCERTAIN', 'STEAM_INPUT_UNCERTAIN'].includes(code)) return 'delivery_uncertain';
   const message = typeof value(error, 'message') === 'string' ? value(error, 'message').slice(0, 16384) : '';
   // Messages are used only for fixed classification, never retained or logged.
   if (/symbolic|symlink|hard links|unsafe archive/i.test(message)) return 'backup_unsafe_links';
@@ -81,6 +85,8 @@ export function networkFailure(error) {
 }
 
 const messages = {
+  steam_library_required: 'Steam-Einrichtung erforderlich. Die Serverdateien zuerst über „Steam einrichten“ im Panel vorbereiten. Die laufende Instanz bleibt aktiv.',
+  steam_mods_required: 'Ausgewählte Workshop-Mods sind noch nicht vorbereitet. Die geschützte Steam-Bibliothek zuerst ergänzen. Die laufende Instanz bleibt aktiv.',
   backup_unsafe_links: 'Die Sicherung wurde wegen unsicherer Datei-Verknüpfungen angehalten. Bitte die Steam-Cache-Pflege prüfen; es wird keine weitere Instanz gestartet.',
   steam_cache_unexpected: 'Der Steam-Cache konnte nicht sicher bereinigt werden. Bitte die vorhandenen Serverdateien prüfen.',
   disk_full: 'Für die Aktion ist zu wenig Speicherplatz verfügbar. Bitte freien Speicher prüfen.',

@@ -38,7 +38,8 @@ textarea {
 button,
 a,
 input,
-select {
+select,
+textarea {
   outline-offset: 4px;
 }
 button {
@@ -58,7 +59,8 @@ button {
 button:focus-visible,
 a:focus-visible,
 input:focus-visible,
-select:focus-visible {
+select:focus-visible,
+textarea:focus-visible {
   outline: 2px solid var(--accent);
 }
 a {
@@ -82,13 +84,15 @@ button {
   border: 0;
 }
 input,
-select {
+select,
+textarea {
   min-width: 0;
 }
 button:not(:disabled),
 a,
 input,
-select {
+select,
+textarea {
   transition:
     background 0.18s,
     border-color 0.18s,
@@ -2027,6 +2031,12 @@ tr:last-child td {
 .art-valheim {
   background: linear-gradient(135deg, #28444d, #162f34 60%, #416b68);
 }
+.art-arma3 {
+  background: linear-gradient(135deg, #52604b, #263329 60%, #6e7660);
+}
+.art-dayz {
+  background: linear-gradient(135deg, #594a40, #2c2b29 60%, #77715c);
+}
 .art-terraria {
   background: linear-gradient(135deg, #3e5935, #24382b 60%, #4b6745);
 }
@@ -2058,10 +2068,16 @@ tr:last-child td {
   font-size: 19px;
 }
 .game-mini-squad.blue,
-.game-mini-fs25.blue {
+.game-mini-fs25.blue,
+.game-mini-arma3.blue {
   background: #35412e;
   color: #bfd2a7;
   border-color: #526145;
+}
+.game-mini-dayz.blue {
+  background: #493d31;
+  color: #dcd0b8;
+  border-color: #76634f;
 }
 .game-mini-valheim.blue {
   background: #244247;
@@ -2084,7 +2100,9 @@ tr:last-child td {
   border-color: #91613e;
 }
 .game-mini-squad > span,
-.game-mini-fs25 > span {
+.game-mini-fs25 > span,
+.game-mini-arma3 > span,
+.game-mini-dayz > span {
   font-size: 13px;
   transform: none;
 }
@@ -2173,7 +2191,8 @@ label:not(.search-box):not(.checkbox-label):not(.pack-search) > small {
   font-weight: 400;
 }
 input:not([type="checkbox"]):not([type="range"]),
-select {
+select,
+textarea {
   border: 1px solid #344358;
   border-radius: 6px;
   background: #0f1722;
@@ -2184,7 +2203,8 @@ select {
   width: 100%;
   min-height: 38px;
 }
-input::placeholder {
+input::placeholder,
+textarea::placeholder {
   color: #526c87;
 }
 select {
@@ -2192,8 +2212,220 @@ select {
   cursor: pointer;
 }
 input:focus,
-select:focus {
+select:focus,
+textarea:focus {
   border-color: #6ba88b;
+}
+textarea {
+  resize: vertical;
+  min-height: 78px;
+  font-family: "Cascadia Code", Consolas, monospace;
+}
+.steam-setup-note > div {
+  min-width: 0;
+}
+.steam-setup-note strong {
+  display: block;
+  color: #ccdfd6;
+  margin-bottom: 4px;
+}
+.steam-setup-note p + p {
+  margin-top: 7px;
+}
+.steam-setup-note code {
+  display: block;
+  overflow-wrap: anywhere;
+  padding: 6px 8px;
+  margin: 5px 0;
+  border: 1px solid #345047;
+  border-radius: 4px;
+  color: #c9eddb;
+  font-size: 10px;
+}
+.steam-profile-setup {
+  display: grid;
+  gap: 7px;
+  margin-top: 13px;
+  border-top: 1px solid #354239;
+  padding-top: 12px;
+  color: #a9bcad;
+  font-size: 10px;
+  line-height: 1.6;
+}
+.steam-profile-setup code {
+  display: block;
+  overflow-wrap: anywhere;
+  color: #cfdfd0;
+  font-size: 9px;
+  font-family: "Cascadia Code", Consolas, monospace;
+}
+.steam-profile-setup summary,
+.steam-setup-note summary {
+  cursor: pointer;
+  color: #91aa9b;
+  margin-top: 7px;
+}
+.steam-profile-setup .button,
+.steam-setup-note .button {
+  margin: 8px 0 2px;
+}
+.steam-topbar-button {
+  font-size: 10px;
+  padding: 7px 10px;
+}
+.steam-security-connect {
+  border-top: 1px solid #2d3c43;
+  padding-top: 18px;
+  margin-top: 15px;
+}
+.steam-security-connect .button {
+  margin-top: 13px;
+}
+.steam-setup-body {
+  padding: 23px 26px;
+}
+.steam-privacy-note {
+  margin: 0 0 18px;
+  line-height: 1.7;
+}
+.steam-privacy-note > svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.steam-setup-body .alert {
+  margin-bottom: 17px;
+}
+.steam-setup-wait {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #9cb4c4;
+  font-size: 11px;
+}
+.steam-start-form .form-row {
+  grid-template-columns: minmax(125px, 0.65fr) minmax(0, 1.35fr);
+  margin-top: 17px;
+}
+.steam-start-form label > span {
+  display: inline;
+  color: #7c91a3;
+  font-weight: 400;
+}
+.steam-setup-help {
+  color: #91a6b8;
+  font-size: 10px;
+  line-height: 1.7;
+  margin: 11px 0 15px;
+}
+.steam-console-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin: 22px 0 9px;
+}
+.steam-console-heading > span:first-child {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #b0c5d4;
+  font-size: 11px;
+}
+.steam-console-heading .tag {
+  font-size: 8px;
+}
+.steam-terminal {
+  min-height: 145px;
+  max-height: 270px;
+  overflow: auto;
+  background: #0b131b;
+  border: 1px solid #2c3c47;
+  border-radius: 7px;
+  padding: 15px;
+  color: #b5d7c6;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 10px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 2;
+}
+.steam-input-form {
+  margin-top: 18px;
+}
+.steam-input-form > label {
+  margin-bottom: 9px;
+}
+.steam-input-row {
+  display: flex;
+  align-items: stretch;
+  gap: 9px;
+}
+.steam-input-row > input {
+  flex: 1;
+  min-width: 0;
+}
+.steam-input-row .button {
+  flex-shrink: 0;
+}
+.steam-input-form > small {
+  display: block;
+  color: #899faf;
+  font-size: 9px;
+  line-height: 1.7;
+  margin-top: 8px;
+}
+.steam-session-actions {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 19px;
+}
+.steam-session-actions .text-button {
+  font-size: 10px;
+}
+.steam-cancel-button {
+  color: #d99c9c;
+}
+.steam-cancel-confirm {
+  margin-top: 18px;
+  background: #2c2024;
+  border: 1px solid #67424a;
+  border-radius: 7px;
+  padding: 15px;
+  color: #e5bdc3;
+  font-size: 11px;
+  line-height: 1.7;
+}
+.steam-cancel-confirm > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin-top: 12px;
+}
+@media (max-width: 560px) {
+  .steam-topbar-button {
+    padding: 6px;
+  }
+  .steam-topbar-button > span {
+    display: none;
+  }
+  .steam-setup-body {
+    padding: 19px;
+  }
+  .steam-start-form .form-row {
+    grid-template-columns: 1fr;
+  }
+  .steam-input-row {
+    flex-direction: column;
+  }
+  .steam-console-heading {
+    align-items: flex-start;
+  }
+  .steam-terminal {
+    max-height: 220px;
+  }
 }
 input[type="range"] {
   appearance: none;

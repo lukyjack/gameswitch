@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import { ftbEnvironment } from './minecraft-memory.mjs';
 import { dockerPortBindings } from './game-ports.mjs';
+import { buildArmaDefinition } from './arma.mjs';
+import { buildDayzDefinition } from './dayz.mjs';
 
 const minecraft = JSON.parse(fs.readFileSync(new URL('./templates/minecraft.json', import.meta.url), 'utf8'));
 const gmod = JSON.parse(fs.readFileSync(new URL('./templates/gmod.json', import.meta.url), 'utf8'));
@@ -42,6 +44,8 @@ function newGameDefinition(profile, config, runtimeName) {
   // https://terraria.org/api/download/pc-dedicated-server/terraria-server-1458.zip
   const common = { type: profile.gameId, name: runtimeName, node: config.nodeId, users: [], data: { port: variable(profile.port) }, uninstall: [], requirements: { os: 'linux', arch: 'amd64' } };
   const run = { autostart: false, autorecover: false, autorestart: false, stdin: { type: 'stdin' } };
+  if (profile.gameId === 'arma3') return buildArmaDefinition(profile, config, runtimeName, docker(profile, config, 'steamcmd/steamcmd:latest'));
+  if (profile.gameId === 'dayz') return buildDayzDefinition(profile, config, runtimeName, docker(profile, config, 'steamcmd/steamcmd:latest'));
   if (profile.gameId === 'factorio') {
     const password = privateValue(config, 'serverPassword', 8, 64);
     const world = profile.worldName || 'World';

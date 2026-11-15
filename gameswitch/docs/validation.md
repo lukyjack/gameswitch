@@ -1,5 +1,27 @@
 # Prüfstand · 15. November 2026
 
+## Steam-Anmeldung direkt in der Oberfläche
+
+Der Button „Steam einrichten“ und der Dialog für die tatsächliche SteamCMD-Anmeldung sind implementiert. Er ist im Header, unter „Sicherheit & System“ sowie an Arma-/DayZ-Profilen und deren Formularen erreichbar. Die Oberfläche verwendet verdeckte, flüchtige Eingaben, begrenzte Textausgabe und ausdrücklichen Abbruch; keine automatische Wiederholung von Eingaben. Der abschließende lokale Produktionsbuild nach der defensiven SSE-JSON-Prüfung und präzisierten Speicherformulierung ist `index-NWHxnEeW.js` mit `index-Cd5HyGcp.css`.
+
+Die vollständige Node-Suite bestand mit 163 Tests, einschließlich der neuen Steam-API-/SSE-/Clientprüfungen. Auf Linux bestanden 16 Python-Tests des Bibliothekshelfers, zehn Brokerprüfungen sowie acht native Unix-Socket-/PTY-Integrationsprüfungen. Diese prüfen unter anderem Authentifizierung/Origin/CSRF, begrenzte Protokollframes und Eingaben, flüchtige Ausgabe-Redaktion, Sitzungsgrenzen sowie den Abbruch ausschließlich des eigenen Einrichtungsprozesses.
+
+Ein gesonderter Nachweis nutzte den tatsächlichen Produktionsbroker mit dem unprivilegierten Appbenutzer UID 988: Der feste Hosthelfer startete und lieferte seinen Accountnamen-Prompt. Der Vorgang wurde anschließend abgebrochen; der Helfer endete mit Code 1 und der `.preparing`-Marker wurde entfernt. Es wurden keine Zugangsdaten übermittelt. Dieser Nachweis bestätigt den privaten Einrichtungsweg bis zum ersten Prompt und dessen Abbruch, keine erfolgreiche SteamCMD-Authentifizierung. Der zusätzliche Panel-Anmeldeweg wurde anschließend mit dem Build `index-NWHxnEeW.js` / `index-Cd5HyGcp.css` ausgerollt; GameSwitch, der neue Steam-Einrichtungsdienst, PufferPanel und Caddy wurden als aktiv bestätigt.
+
+Die Browserprüfung in der lokalen Sandbox bestätigte Header-Button → Einrichtungsdialog → Start → verbundene SSE-Ausgabe → verdeckte Dummy-Eingabe mit anschließend geleertem Feld und ohne Rückanzeige → ausdrücklichen Abbruch. Die Dummy-Eingabe wurde ausschließlich am simulierten Browser-Testdienst verwendet; sie war keine Steam-Anmeldung.
+
+Zusätzlich verband ein isolierter authentifizierter HTTP-/Sandboxzustand des ausgerollten Anwendungscodes dessen echte API/SSE-/Node-IPC-Strecke mit dem Produktionsbroker und dem festen CLI-Helfer unter UID 988. Nachgewiesen: Start 201, SSE 200, tatsächlicher Accountnamen-Prompt des Helfers, Abbruch 200 und Endzustand `cancelled`. Es wurden keine Steam-Zugangsdaten gesendet; der Test verzeichnete null Spiel-Lebenszyklusaufrufe und der `.preparing`-Marker wurde entfernt. Der produktive Minecraftcontainer blieb bei derselben ID `76fcf2bc8ee7`, Startzeit 14:48:26.962 UTC, Neustartzähler null und Health `healthy`.
+
+Der Eigentümer hat die Steam-Anmeldung ausdrücklich auf später verschoben. Es wurde kein Accountpasswort und kein Steam-Guard-Code eingegeben; authentifizierte Downloads sowie native Arma-/DayZ-Spielstarts und Spielbeitritt bleiben offen.
+
+## Erweiterung um Arma 3 und DayZ
+
+Der Katalog umfasst mit Arma 3 und DayZ jetzt neun Spiele. Vor der neuen Web-Steam-Einrichtung bestand die vollständige Node-Suite mit 144 Tests. Zusätzlich bestanden 16 Python-Hosthelfertests und drei Bibliotheksprüfungen direkt unter Linux; die späteren Broker-/Webtests sind davon getrennt. Darin enthalten sind sieben neue API-/Sicherheitsprüfungen für Authentifizierung/Origin/CSRF, freigegebene Missionen, gültige Steam-Konten, begrenzte Workshop-Listen, Injection-/Crossgame-Eingaben, private Spielpasswörter, abgeleitete Portbereiche und reine Leseprotokolle. Eine fehlende Steam-Bibliothek verhindert die Aktivierung vor jeder Save-/Stopp-Aktion an der laufenden Minecraft-Instanz. Der Produktionsbuild der neuen Formularoberfläche wurde lokal erfolgreich erzeugt.
+
+Arma-Admin-Konfiguration, DayZ-Vorlage, Bibliotheksmanifest und Dateigrenzen sind implementiert und werden gezielt geprüft. Die ersten authentifizierten Steam-Downloads, die nativen Spielstarts, Spielerbeitritt, geordnetes Speichern/Stoppen und ein vollständiger Arma-/DayZ-Backup-/Restore-Zyklus sind noch nicht bestätigt. Die Arma-/DayZ-Profilformulare, beide simulierten Wechselabläufe mit Backup und die gestoppte Arma-Adminpflege wurden in der lokalen Sandbox geprüft. Anschließend wurden diese Erweiterung und der CLI-Hosthelfer auf dem VPS bereitgestellt; Minecraft behielt Container-ID, Startzeit und den Neustartzähler null. Die danach ergänzte Web-Steam-Einrichtung und ihre abgegrenzten Browser-/HTTP-/Broker-Nachweise sind oben gesondert erfasst. Die Sandbox simuliert Server-/Steam-Bereitschaft und ist kein Nachweis einer echten Spieleinstallation. Für diese Erweiterung wurde Minecraft nicht gestoppt; GitHub-CI bleibt deaktiviert.
+
+Die nachfolgenden 109-Tests-/Build- und Minecraft-/GMod-Laufzeitnachweise dokumentieren den vorherigen abgeschlossenen Stand und werden durch den neuen Zwischenstand nicht ersetzt.
+
 ## Automatisierte Prüfungen
 
 - `npm test`: Die abschließende vollständige Node-Suite bestand nach der letzten Diagnose-/ID-Härtung mit 109 Tests einschließlich Unterfällen. Geprüft sind Authentifizierung, Cookies, Origin/CSRF, Eingabe-/Ressourcen-/Portgrenzen, geheime Profilfelder, unsichere Dateipfade, Konsolenvalidierung und Zustellunsicherheit ohne Wiederholung sowie Adminrollen und Listenänderungen. Lebenszyklusprüfungen decken konkurrierende Anfragen, dauerhafte Sicherheitsmarker, Save-/Stopp-/Backupfehler, Restore mit Sicherheitskopie und den Neustart ohne Neuinstallation ab. Diagnose- und HTTP-Tests prüfen die eingeschränkten Logfelder und Korrelations-IDs.
@@ -9,7 +31,7 @@
 
 ## Browserprüfung
 
-Die isolierte Sandbox wurde für Anmeldung, Profilanlage, Start/Wechsel, Backup/Wiederherstellung, Katalogsuche und den bestätigten Restart-Ablauf geprüft. Minecraft-OP-Hilfe und Befehleingabe wurden mit simulierten Namen getestet. Die neue Oberfläche wurde außerdem für alle sieben Katalogeinträge, GMod-Superadmin-Hilfe, Valheim-/Terraria-/Factorio-/vorbereitete Squad-Formulare, gestoppte Valheim-Adminlistenpflege und die lesbare FS25-Sperre geprüft. Das bestätigt Bedienabläufe, keine echten Rechtevergaben.
+Die isolierte Sandbox des vorherigen Stands wurde für Anmeldung, Profilanlage, Start/Wechsel, Backup/Wiederherstellung, Katalogsuche und den bestätigten Restart-Ablauf geprüft. Minecraft-OP-Hilfe und Befehleingabe wurden mit simulierten Namen getestet. Die damalige Oberfläche wurde außerdem für ihre sieben Katalogeinträge, GMod-Superadmin-Hilfe, Valheim-/Terraria-/Factorio-/vorbereitete Squad-Formulare, gestoppte Valheim-Adminlistenpflege und die lesbare FS25-Sperre geprüft. Das bestätigt Bedienabläufe, keine echten Rechtevergaben; Arma-/DayZ-Browserprüfungen sind oben gesondert erfasst.
 
 ## Echte Laufzeit auf dem VPS
 
@@ -24,6 +46,8 @@ Die nachfolgenden neuen Spiele wurden über isolierte Testinstanzen auf diesem H
 | Valheim | Native Installation, Weltstart, geordnetes SIGINT-Ende, Admin-Dateiänderung und vollständiges Backup der isolierten Instanz | Kein echter Spieler wurde zum Administrator gemacht; allgemeine Modunterstützung ist nicht freigegeben. |
 | Terraria 1.4.5.8 | Echter Start, Konsolenantwort, Speichern, geordnetes Stoppen und vollständiges Backup der isolierten Instanz | Kein Nachweis für TShock/tModLoader oder andere Serverversionen. |
 | Factorio 2.1.24 | Offizielles Paket mit SHA-256 geprüft, Welt erzeugt und gehostet; `/help` beantwortet, `/save World` schrieb `state/saves/World.zip`, `/quit` endete mit `Goodbye`; vollständiges Backup und Restore mit identischem Welt-Hash und entfernter nachträglicher Testmarkierung | Basisspiel, privater IP-Beitritt und Kontoprüfung; keine öffentliche Token-Anbindung oder fremden Modpacks geprüft. |
+| Arma 3 | Typisierte Profil-API, feste Missionen, Steam-ID-/Workshop-Prüfungen, private Passwörter und Aktivierungssperre automatisiert geprüft | Steam-Anmeldung, echte Serverinstallation, native Spielbereitschaft, Rechtevergabe im Spiel und produktives Backup/Restore stehen noch aus. |
+| DayZ | Chernarus-Profil, numerische Workshop-IDs, private Passwörter, Ports und reine Leseprotokolle automatisiert geprüft | Steam-Anmeldung, native Installation/Spielbereitschaft und geprüfte Welt-/Charakterpersistenz stehen noch aus; kein nativer Steam-ID-Adminhelfer zugesagt. |
 | Squad | Steam-Installation erfolgreich, tatsächlicher nativer Kartenstart getestet | Absturz mit Signal 11 ohne OOM-Nachweis; gesperrt. Der genaue Unreal-Crashlog wurde beim damaligen Cleanup nicht bewahrt. Eine RCON-Probe während des Kartenladens wurde als Einfluss nicht getrennt untersucht; der Test beweist keine prinzipielle VPS-Unvereinbarkeit. |
 | FS25 | Voraussetzungen und sichtbare Sperre geprüft | Keine Windows-/Lizenzlaufzeit eingerichtet; keine Spielinstallation oder Startfreigabe. |
 
