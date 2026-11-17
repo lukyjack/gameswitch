@@ -93,7 +93,7 @@ test('Arma and DayZ retain selected missions and mods while keeping game passwor
     assert.equal(created.data.profile.mission, profileInput(game).mission);
     assert.deepEqual(created.data.profile.workshopIds, ['450814997']);
     assert.equal(created.data.profile.consoleInput, false);
-    assert.equal(created.data.profile.adminKind, game === 'arma3' ? 'arma3' : 'none');
+    assert.equal(created.data.profile.adminKind, game);
     assert.equal(created.data.profile.serverPasswordSet, true);
     assert.equal(created.data.profile.serverPassword, undefined);
     if (game === 'arma3') assert.deepEqual(created.data.profile.adminSteamIds, [steamId]);

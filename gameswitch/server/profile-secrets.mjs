@@ -7,7 +7,9 @@ import { z } from 'zod';
 const secretSchema = z.object({
   serverPassword: z.string().min(8).max(64).regex(/^[A-Za-z0-9_-]+$/).optional(),
   rconPassword: z.string().min(16).max(128).regex(/^[A-Za-z0-9_-]+$/).optional(),
+  adminPassword: z.string().min(8).max(32).regex(/^[A-Za-z0-9_-]+$/).optional(),
 }).strict();
+const flags = secrets => ({ serverPasswordSet: Boolean(secrets.serverPassword), rconPasswordSet: Boolean(secrets.rconPassword), adminPasswordSet: Boolean(secrets.adminPassword) });
 const profileId = /^(?:[a-f0-9]{16,64}|[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})$/i;
 
 function location(config, id) {
@@ -41,7 +43,7 @@ export async function readProfileSecrets(config, id) {
 
 export async function getProfileSecretFlags(config, id) {
   const secrets = await readProfileSecrets(config, id);
-  return { serverPasswordSet: Boolean(secrets.serverPassword), rconPasswordSet: Boolean(secrets.rconPassword) };
+  return flags(secrets);
 }
 
 export async function writeProfileSecrets(config, id, patch) {
@@ -62,5 +64,5 @@ export async function writeProfileSecrets(config, id, patch) {
     await fs.rename(temporary, file);
     await fs.chmod(file, 0o600);
   } finally { await handle?.close(); await fs.rm(temporary, { force: true }); }
-  return { serverPasswordSet: Boolean(merged.serverPassword), rconPasswordSet: Boolean(merged.rconPassword) };
+  return flags(merged);
 }

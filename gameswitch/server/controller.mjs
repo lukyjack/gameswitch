@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { createDiagnostics, friendlyDiagnosticMessage, validCorrelationId } from './diagnostics.mjs';
+import { libraryGames } from './game-library.mjs';
+import { profilesHavePortCollision } from './game-ports.mjs';
 const quietDiagnostics = createDiagnostics({ write: () => {} });
 
 export class Controller {
@@ -33,8 +35,10 @@ export class Controller {
     if (!this.store.healthy) { const error = new Error('Persistenzfehler: Aktionen sind bis zum Dienstneustart gesperrt.'); error.status = 503; throw error; }
     if (this.busy) { const error = new Error('Eine Serveraktion läuft bereits.'); error.status = 409; throw error; }
     const profile = this.profile(profileId);
+    if (type === 'update' && !libraryGames.has(profile.gameId)) { const error = new Error('Server & Mods lassen sich nur für Arma 3 und DayZ aus der Steam-Bibliothek aktualisieren.'); error.status = 400; throw error; }
     const labels = type === 'activate' ? ['Laufzeit prüfen', 'Spielstand speichern', 'Alte Instanz stoppen', 'Sicherung abschließen', 'Ziel installieren', 'Ziel starten']
       : type === 'restart' ? ['Laufzeit prüfen', 'Spielstand speichern', 'Instanz stoppen', 'Stopp bestätigen', 'Sicherung abschließen', 'Instanz starten']
+      : type === 'update' ? ['Laufzeit prüfen', 'Spielstand speichern', 'Instanz stoppen', 'Sicherung abschließen', 'Server & Mods aktualisieren', 'Instanz starten']
       : type === 'restore' ? ['Laufzeit prüfen', 'Sicherheitskopie erstellen', 'Sicherung wiederherstellen']
       : type === 'backup' ? ['Laufzeit prüfen', 'Sicherung abschließen'] : ['Laufzeit prüfen', 'Spielstand speichern', 'Instanz stoppen'];
     const job = { id: randomUUID(), type, status: 'running', profileId, createdAt: new Date().toISOString(), steps: labels.map(label => ({ label, status: 'pending' })) };
@@ -77,7 +81,13 @@ export class Controller {
         await this.step(job, 1, async () => { if (current) await this.runtime.save(current); });
         await this.step(job, 2, async () => { if (current) { await this.runtime.stop(current); current.status = 'stopped'; this.store.state.activeProfileId = null; } });
         await this.step(job, 3, async () => { if (source) await this.backup(source, 'Vor-Wechsel'); });
-        await this.step(job, 4, async () => { if (!profile.installed) { await this.runtime.install(profile); profile.installed = true; await this.store.save(); } });
+        await this.step(job, 4, async () => {
+          if (profile.installed) return;
+          const result = await this.runtime.install(profile);
+          profile.installed = true;
+          if (typeof result?.libraryUpdatedAt === 'string') profile.libraryUpdatedAt = result.libraryUpdatedAt;
+          await this.store.save();
+        });
         await this.step(job, 5, async () => {
           // Re-read every profile immediately before starting; stale browser/state cannot start a second managed server.
           if (await this.reconcile()) throw new Error('Eine Instanz wurde außerhalb von GameSwitch gestartet.');
@@ -109,6 +119,42 @@ export class Controller {
           profile.status = 'running';
           this.store.state.activeProfileId = profile.id;
         });
+      } else if (job.type === 'update') {
+        if (!profile.installed) throw new Error('Profil wurde noch nicht installiert.');
+        if (this.store.state.recoveryRequiredProfileIds.includes(profile.id)) throw new Error('Unvollständige Wiederherstellung: Dieses Profil muss zuerst erfolgreich aus einer Sicherung wiederhergestellt werden.');
+        if (this.store.state.pendingSafetyBackupProfileId && this.store.state.pendingSafetyBackupProfileId !== profile.id) throw new Error('Ausstehende Sicherung zuerst für das vorherige Profil abschließen.');
+        const wasRunning = current?.id === profile.id;
+        // The reinstall runs in a container with this profile's port bindings.
+        if (current && !wasRunning && profilesHavePortCollision(current, profile)) throw Object.assign(new Error('Ein anderes laufendes Profil nutzt dieselben Ports.'), { diagnosticReason: 'port_conflict' });
+        // Library, Workshop items and private settings are checked before the
+        // running game is touched.
+        await this.runtime.preflight?.(profile);
+        if (wasRunning) {
+          this.store.state.pendingSafetyBackupProfileId = profile.id;
+          await this.store.save();
+        }
+        await this.step(job, 1, async () => { if (wasRunning) await this.runtime.save(profile); });
+        await this.step(job, 2, async () => {
+          if (wasRunning) await this.runtime.stop(profile);
+          const status = await this.runtime.status(profile);
+          if (status.running !== false) throw new Error('Stopp wurde nicht bestätigt. Update bleibt angehalten.');
+          profile.status = 'stopped';
+          if (wasRunning) this.store.state.activeProfileId = null;
+        });
+        await this.step(job, 3, () => this.backup(profile, 'Vor-Update'));
+        await this.step(job, 4, async () => {
+          const result = await this.runtime.update(profile);
+          if (typeof result?.libraryUpdatedAt === 'string') profile.libraryUpdatedAt = result.libraryUpdatedAt;
+          await this.store.save();
+        });
+        await this.step(job, 5, async () => {
+          if (!wasRunning) return;
+          if (await this.reconcile()) throw new Error('Eine Instanz wurde außerhalb von GameSwitch gestartet.');
+          if (this.store.state.pendingSafetyBackupProfileId) throw new Error('Ausstehende Sicherung verhindert den Start.');
+          await this.runtime.start(profile);
+          profile.status = 'running';
+          this.store.state.activeProfileId = profile.id;
+        });
       } else if (job.type === 'stop') {
         if (current?.id !== profile.id) throw new Error('Dieses Profil läuft nicht.');
         this.store.state.pendingSafetyBackupProfileId = profile.id; await this.store.save();
@@ -130,7 +176,7 @@ export class Controller {
           });
         }
       }
-      job.status = 'completed'; this.store.event(`${job.type === 'activate' ? 'Profilwechsel' : job.type === 'restart' ? 'Serverneustart' : job.type === 'stop' ? 'Serverstopp' : job.type === 'restore' ? 'Wiederherstellung' : 'Sicherung'} für „${profile.name}“ abgeschlossen.`);
+      job.status = 'completed'; this.store.event(`${job.type === 'activate' ? 'Profilwechsel' : job.type === 'restart' ? 'Serverneustart' : job.type === 'update' ? 'Server- und Mod-Update' : job.type === 'stop' ? 'Serverstopp' : job.type === 'restore' ? 'Wiederherstellung' : 'Sicherung'} für „${profile.name}“ abgeschlossen.`);
     } catch (error) {
       job.status = 'failed';
       const stage = job.steps.find(step => step.status === 'failed' || step.status === 'running')?.label || 'Laufzeit prüfen';

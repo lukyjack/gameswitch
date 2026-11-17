@@ -11,8 +11,15 @@ import { mergeAdminFile } from './game-admin.mjs';
 import { executeLocalRcon } from './rcon-client.mjs';
 import { validateGamePorts } from './game-ports.mjs';
 import { validateRootSteamCache, validateSteamCacheEntries } from './steam-cache.mjs';
-import { requireGameLibrary } from './game-library.mjs';
+import { requireGameLibrary, libraryGames } from './game-library.mjs';
 import { armaAdminConfig } from './arma.mjs';
+import { DAYZ_ADMIN_PASSWORD, DAYZ_CONFIG_FILE, DAYZ_MODS, VPP_CREDENTIALS_FILE, VPP_PERMISSIONS_DIRECTORY, VPP_SUPERADMINS_FILE, dayzUsesVpp, withDayzAdminPassword } from './dayz.mjs';
+
+const vppPasswordMissing = () => Object.assign(new Error(`VPPAdminTools (${DAYZ_MODS.vpp}) benötigt ein Adminpasswort. Bitte zuerst im Adminbereich des Profils ein Adminpasswort festlegen.`), { status: 409, diagnosticReason: 'admin_password_required' });
+function validAdminPassword(password) {
+  if (typeof password !== 'string' || !DAYZ_ADMIN_PASSWORD.test(password)) throw Object.assign(new Error('Adminpasswort: 8–32 Buchstaben, Ziffern, Unterstriche oder Bindestriche.'), { status: 400 });
+  return password;
+}
 import { upstreamFailure, networkFailure } from './diagnostics.mjs';
 
 export class SandboxRuntime {
@@ -29,8 +36,20 @@ export class SandboxRuntime {
     await fs.rename(temporary, file);
   }
   async status(profile) { return this.read(profile); }
-  async preflight(profile) { validateGamePorts(profile, this.config); }
-  async install(profile) { const state = await this.read(profile); state.installed = true; state.lines.push('Sandbox: Installation geprüft.'); await this.write(profile, state); await delay(200); }
+  async preflight(profile) {
+    validateGamePorts(profile, this.config);
+    if (profile.gameId === 'dayz' && dayzUsesVpp(profile) && !(await readProfileSecrets(this.config, profile.id)).adminPassword) throw vppPasswordMissing();
+  }
+  async install(profile) { const state = await this.read(profile); state.installed = true; state.lines.push('Sandbox: Installation geprüft.'); await this.write(profile, state); await delay(200); return {}; }
+  async update(profile) {
+    if (!libraryGames.has(profile.gameId)) throw Object.assign(new Error('Für dieses Spiel gibt es kein Bibliotheksupdate.'), { status: 400 });
+    const state = await this.read(profile);
+    if (state.running !== false) throw Object.assign(new Error('Das Update benötigt eine gestoppte Instanz.'), { status: 409 });
+    state.updates = (state.updates || 0) + 1;
+    state.lines.push('Sandbox: Server und Mods aus der simulierten Bibliothek aktualisiert; Welt, Profile und Konfiguration bleiben erhalten.');
+    await this.write(profile, state); await delay(200);
+    return {};
+  }
   async save(profile) { const state = await this.read(profile); state.saves += 1; state.lines.push('Sandbox: Spielstand gespeichert.'); await this.write(profile, state); }
   async stop(profile) { const state = await this.read(profile); state.running = false; state.lines.push('Sandbox: Instanz sauber beendet.'); await this.write(profile, state); await delay(200); }
   async start(profile) { const state = await this.read(profile); state.running = true; state.lines.push('Sandbox: Instanz gestartet.'); await this.write(profile, state); await delay(250); }
@@ -69,12 +88,25 @@ export class SandboxRuntime {
     if (state.running !== false) throw Object.assign(new Error('Für diese Adminliste muss ein gestopptes Profil bestätigt sein.'), { status: 409 });
     state.adminFiles ||= {};
     if (profile.gameId === 'arma3' && state.adminFiles[action.path] === undefined) state.adminFiles[action.path] = armaAdminConfig(profile.adminSteamIds);
+    if (action.path === VPP_SUPERADMINS_FILE && state.adminFiles[action.path] === undefined) state.adminFiles[action.path] = (profile.adminSteamIds || []).map(id => `${id}\n`).join('');
     state.adminFiles[action.path] = mergeAdminFile(action, state.adminFiles[action.path] || '');
     state.lines.push('Sandbox: Adminliste simuliert gespeichert; keine echten Spielrechte verändert.');
     await this.write(profile, state);
     return { simulated: true, requiresRestart: true };
   }
 }
+
+// Appended to SandboxRuntime below to keep the simulated contract aligned.
+SandboxRuntime.prototype.setAdminPassword = async function setAdminPassword(profile, password) {
+  validAdminPassword(password);
+  if (profile.gameId !== 'dayz') throw Object.assign(new Error('Ein Adminpasswort wird hier nur für DayZ verwaltet.'), { status: 400 });
+  const state = await this.read(profile);
+  if (state.running !== false) throw Object.assign(new Error('Das Adminpasswort lässt sich nur bei bestätigt gestopptem Profil ändern.'), { status: 409 });
+  state.adminPasswordChanges = (state.adminPasswordChanges || 0) + 1;
+  state.lines.push(`Sandbox: Adminpasswort für #login${dayzUsesVpp(profile) ? ' und VPPAdminTools' : ''} simuliert gespeichert.`);
+  await this.write(profile, state);
+  return { simulated: true, requiresRestart: true };
+};
 
 export class PufferRuntime {
   constructor(config, fetcher = fetch) { this.config = config; this.fetcher = fetcher; this.token = null; this.expires = 0; this.commandOutputs = new Map(); }
@@ -141,7 +173,7 @@ export class PufferRuntime {
     } catch (error) { if (error.status === 404 && !profile.installed) return { running: false, provisioned: false }; throw error; }
   }
   async install(profile) {
-    await requireGameLibrary(this.config, profile);
+    const library = await requireGameLibrary(this.config, profile);
     let exists = false;
     try { await this.request(this.endpoint(profile)); exists = true; }
     catch (error) { if (error.status !== 404) throw error; }
@@ -151,6 +183,21 @@ export class PufferRuntime {
     }
     await this.status(profile); // Require patched daemon before any installation/start.
     await this.request(`${this.endpoint(profile)}/install?wait=true`, { method: 'POST', timeout: 1800000 });
+    return { libraryUpdatedAt: library?.updatedAt };
+  }
+  async update(profile) {
+    // Re-applies the current server definition and its install steps from the
+    // prepared Steam library: server files, mission defaults, mods and keys are
+    // refreshed; persistence, profiles/ and existing configs are kept.
+    if (!libraryGames.has(profile.gameId)) throw Object.assign(new Error('Für dieses Spiel gibt es kein Bibliotheksupdate.'), { status: 400 });
+    const library = await requireGameLibrary(this.config, profile);
+    if ((await this.status(profile)).running !== false) throw Object.assign(new Error('Das Update benötigt eine bestätigt gestoppte Instanz.'), { status: 409 });
+    const profileSecrets = await readProfileSecrets(this.config, profile.id);
+    await this.request(`${this.endpoint(profile)}/definition`, { method: 'PUT', body: buildDefinition(profile, { ...this.config, profileSecrets }) });
+    if ((await this.status(profile)).running !== false) throw Object.assign(new Error('Die Instanz läuft oder ihr Status ist unklar. Das Update wurde angehalten.'), { status: 409 });
+    await this.request(`${this.endpoint(profile)}/install?wait=true`, { method: 'POST', timeout: 1800000 });
+    if ((await this.status(profile)).running !== false) throw new Error('Nach dem Update läuft die Instanz unerwartet. Bitte Konsole prüfen.');
+    return { libraryUpdatedAt: library?.updatedAt };
   }
   async preflight(profile) {
     await requireGameLibrary(this.config, profile);
@@ -159,6 +206,7 @@ export class PufferRuntime {
     if (['valheim', 'squad', 'factorio', 'arma3', 'dayz'].includes(profile.gameId)) {
       const secrets = await readProfileSecrets(this.config, profile.id);
       if ((['valheim', 'factorio', 'arma3', 'dayz'].includes(profile.gameId) && !secrets.serverPassword) || (profile.gameId === 'squad' && !secrets.rconPassword)) throw Object.assign(new Error('Erforderliche private Spieleinstellungen fehlen. Die laufende Instanz bleibt unverändert.'), { status: 409 });
+      if (profile.gameId === 'dayz' && dayzUsesVpp(profile) && !secrets.adminPassword) throw vppPasswordMissing();
     }
   }
   async save(profile) {
@@ -259,6 +307,31 @@ export class PufferRuntime {
     // daemon unlinks its child links without following them; archive checks stay strict.
     await this.request(this.fileEndpoint(profile, '.steam'), { method: 'DELETE', timeout: 15000 });
   }
+  async ensureDirectory(profile, directory) {
+    await this.request(`${this.fileEndpoint(profile, directory)}?folder`, { method: 'PUT', body: '', text: true, timeout: 15000 });
+  }
+  async setAdminPassword(profile, password) {
+    // The secret store is written by the caller only after these files are
+    // confirmed, so a failed write never leaves a password the server lacks.
+    validAdminPassword(password);
+    if (profile.gameId !== 'dayz') throw Object.assign(new Error('Ein Adminpasswort wird hier nur für DayZ verwaltet.'), { status: 400 });
+    if (!profile.installed) return { requiresRestart: false };
+    if ((await this.status(profile)).running !== false) throw Object.assign(new Error('Das Adminpasswort lässt sich nur bei bestätigt gestopptem Profil ändern.'), { status: 409 });
+    let original;
+    try { original = await this.request(this.fileEndpoint(profile, DAYZ_CONFIG_FILE), { raw: true, maxBytes: 256 * 1024, timeout: 15000 }); }
+    catch (error) { if (error.status === 404) throw Object.assign(new Error('Die DayZ-Serverkonfiguration fehlt. Bitte „Server & Mods aktualisieren“ ausführen.'), { status: 409 }); throw error; }
+    const updated = withDayzAdminPassword(original, { adminPassword: password });
+    if ((await this.status(profile)).running !== false) throw Object.assign(new Error('Die Instanz läuft oder ihr Status ist unklar. Das Adminpasswort wurde nicht verändert.'), { status: 409 });
+    try {
+      if (updated !== original) await this.request(this.fileEndpoint(profile, DAYZ_CONFIG_FILE), { method: 'PUT', body: updated, text: true, timeout: 15000 });
+      if (dayzUsesVpp(profile)) {
+        // VPPAdminTools hashes this first line itself on the next start.
+        await this.ensureDirectory(profile, VPP_PERMISSIONS_DIRECTORY);
+        await this.request(this.fileEndpoint(profile, VPP_CREDENTIALS_FILE), { method: 'PUT', body: `${password}\n`, text: true, timeout: 15000 });
+      }
+    } catch { throw Object.assign(new Error('Die Bestätigung der Admin-Konfiguration fehlt. Bitte erneut setzen; das gespeicherte Passwort bleibt bis dahin unverändert.'), { code: 'ADMIN_WRITE_UNCERTAIN' }); }
+    return { requiresRestart: true };
+  }
   async readAdminFile(profile, file) {
     try { return await this.request(this.fileEndpoint(profile, file), { raw: true, maxBytes: 256 * 1024, timeout: 15000 }); }
     catch (error) { if (error.status === 404) return ''; throw error; }
@@ -275,6 +348,7 @@ export class PufferRuntime {
       return { requiresRestart: false };
     }
     if ((await this.status(profile)).running !== false) throw Object.assign(new Error('Für diese Adminliste muss ein gestopptes Profil bestätigt sein.'), { status: 409 });
+    if (action.directory) await this.ensureDirectory(profile, action.directory);
     const original = await this.readAdminFile(profile, action.path);
     const updated = mergeAdminFile(action, original);
     if (updated === original) return { requiresRestart: true };

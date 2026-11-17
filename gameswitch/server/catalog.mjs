@@ -1,10 +1,11 @@
 import { z } from 'zod';
+import { DAYZ_MODS } from './dayz.mjs';
 
 export const catalog = [
   { id: 'minecraft', name: 'Minecraft Java', description: 'Vanilla, Paper, Fabric, Forge, Feed the Beast und Modrinth-Modpacks', kind: 'minecraft', loaders: ['vanilla', 'paper', 'fabric', 'forge', 'ftb', 'modrinth'], defaultPort: 25565, defaultMemoryMb: 6144, available: true, consoleInput: true, adminKind: 'minecraft', minMemoryMb: 1024, maxPlayers: 128 },
   { id: 'gmod', name: "Garry’s Mod", description: 'Sandbox und TTT mit Steam-Workshop-Collection', kind: 'steam', loaders: ['steam'], defaultPort: 27015, defaultMemoryMb: 4096, available: true, consoleInput: true, adminKind: 'ulx', minMemoryMb: 1024, maxPlayers: 128, notice: 'Der Adminhelfer benötigt ULX/ULib in der ausgewählten Collection.' },
   { id: 'arma3', name: 'Arma 3', description: 'Linux-Server mit Koop-/Zeus-Missionen, Workshop-Mods und Steam-Administratoren', kind: 'steam', loaders: ['steam'], defaultPort: 2302, defaultMemoryMb: 6144, available: true, consoleInput: false, adminKind: 'arma3', minMemoryMb: 4096, maxPlayers: 32, notice: 'Serverdateien über Steam einrichten im Panel vorbereiten. In-Game-Admins melden sich mit #login an; Protokoll hier nur lesbar.' },
-  { id: 'dayz', name: 'DayZ', description: 'Linux-Communityserver mit Chernarus, Workshop-Mods und persistentem Spielstand', kind: 'steam', loaders: ['steam'], defaultPort: 2302, defaultQueryPort: 27016, defaultMemoryMb: 8192, available: true, consoleInput: false, adminKind: 'none', minMemoryMb: 4096, maxPlayers: 40, notice: 'Steam-Serverdateien zuerst geschützt vorbereiten. Vanilla hat hier keinen Steam-ID-Adminhelfer; erweiterte In-Game-Verwaltung benötigt passende Adminmods. Serverprotokoll nur lesbar.' },
+  { id: 'dayz', name: 'DayZ', description: 'Linux-Communityserver mit Chernarus, Workshop-Mods und persistentem Spielstand', kind: 'steam', loaders: ['steam'], defaultPort: 2302, defaultQueryPort: 27016, defaultMemoryMb: 8192, available: true, consoleInput: false, adminKind: 'dayz', minMemoryMb: 4096, maxPlayers: 40, notice: 'Steam-Serverdateien zuerst geschützt vorbereiten. Das Adminpasswort gilt für #login im Spiel und für VPPAdminTools; Steam-ID-Admins werden über VPPAdminTools vergeben. Serverprotokoll nur lesbar.' },
   { id: 'squad', name: 'Squad', description: 'Linux-Anbindung mit privatem RCON und Steam-Administratoren vorbereitet', kind: 'steam', loaders: ['steam'], defaultPort: 7787, defaultQueryPort: 27165, defaultBeaconPort: 15000, defaultMemoryMb: 12288, available: false, consoleInput: true, adminKind: 'squad', minMemoryMb: 8192, maxPlayers: 100, unavailableReason: 'Installation erfolgreich, aber der native Starttest auf dieser VPS stürzt beim Kartenladen mit Signal 11 ab. Start bis zur Behebung gesperrt. Lizenzierte Squad-Server sind auf VPS nicht zulässig.', notice: 'Auf dieser VPS nur als nicht lizenzierter Server für den Custom Browser. Offizielle Serverlizenzen sind für VPS/VM-Hosting nicht vorgesehen.' },
   { id: 'valheim', name: 'Valheim', description: 'Eigene Welt mit Serverpasswort und Administratorliste', kind: 'steam', loaders: ['steam'], defaultPort: 2456, defaultMemoryMb: 4096, available: true, consoleInput: false, adminKind: 'valheim', minMemoryMb: 2048, maxPlayers: 10, notice: 'Passwort wird getrennt vom Profil gespeichert. Kein Konsoleneingang; Administratoren werden über die Berechtigungsliste verwaltet.' },
   { id: 'terraria', name: 'Terraria', description: 'Offizieller Linux-Server 1.4.5.8 mit eigener Welt', kind: 'native', loaders: ['native'], defaultVersion: '1.4.5.8', defaultPort: 7777, defaultMemoryMb: 2048, available: true, consoleInput: true, adminKind: 'none', minMemoryMb: 1024, maxPlayers: 16, notice: 'Vanilla Terraria bietet keinen Minecraft-ähnlichen Operatorrang. Verwaltung über die Serverkonsole.' },
@@ -13,6 +14,7 @@ export const catalog = [
 ];
 
 const id = z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/);
+export const adminPasswordSchema = z.string().min(8, 'Adminpasswort: mindestens 8 Zeichen.').max(32, 'Adminpasswort: höchstens 32 Zeichen.').regex(/^[A-Za-z0-9_-]+$/, 'Adminpasswort: nur Buchstaben, Ziffern, Unterstriche oder Bindestriche.');
 const ftbId = z.string().regex(/^[1-9][0-9]{0,9}$/);
 const ftbBase = 'https://api.feed-the-beast.com/v1/modpacks/public/modpack';
 export const profileSchema = z.object({
@@ -34,6 +36,7 @@ export const profileSchema = z.object({
   beaconPort: z.number().int().min(1024).max(65535).optional(),
   worldName: z.string().regex(/^[A-Za-z0-9_-]{1,40}$/, 'Weltname: 1–40 Buchstaben, Ziffern, Unterstriche oder Bindestriche.').optional(),
   serverPassword: z.string().min(8).max(64).regex(/^[A-Za-z0-9_-]+$/, 'Passwort: nur Buchstaben, Ziffern, Unterstriche oder Bindestriche.').optional(),
+  adminPassword: adminPasswordSchema.optional(),
   eulaAccepted: z.boolean().optional(),
 }).strict().superRefine((profile, ctx) => {
   const game = catalog.find(game => game.id === profile.gameId);
@@ -54,7 +57,16 @@ export const profileSchema = z.object({
   if (profile.gameId === 'arma3' && profile.mission !== undefined && !['MP_COOP_m01.Stratis', 'MP_COOP_m03.Altis', 'MP_ZGM_m11.Altis', 'MP_ZGM_m12.Stratis', 'MP_CombatPatrol_01.Altis'].includes(profile.mission)) ctx.addIssue({ code: 'custom', message: 'Diese Arma-Mission ist nicht freigegeben.' });
   if (profile.gameId === 'dayz' && profile.mission !== undefined && profile.mission !== 'dayzOffline.chernarusplus') ctx.addIssue({ code: 'custom', message: 'Diese DayZ-Vorlage unterstützt Chernarus.' });
   if (!['arma3', 'dayz'].includes(profile.gameId) && (profile.mission !== undefined || profile.workshopIds !== undefined)) ctx.addIssue({ code: 'custom', message: 'Missionen und Workshop-Listen sind hier nur für Arma 3 und DayZ erlaubt.' });
-  if (profile.gameId !== 'arma3' && profile.adminSteamIds !== undefined) ctx.addIssue({ code: 'custom', message: 'Die Steam-Adminliste ist hier nur für Arma 3 erlaubt.' });
+  if (!['arma3', 'dayz'].includes(profile.gameId) && profile.adminSteamIds !== undefined) ctx.addIssue({ code: 'custom', message: 'Die Steam-Adminliste ist hier nur für Arma 3 und DayZ erlaubt.' });
+  if (profile.gameId !== 'dayz' && profile.adminPassword !== undefined) ctx.addIssue({ code: 'custom', message: 'Ein separates Adminpasswort ist hier nur für DayZ vorgesehen.' });
+  if (profile.gameId === 'dayz') {
+    const mods = profile.workshopIds || [];
+    for (const [id, name] of [[DAYZ_MODS.vpp, 'VPPAdminTools'], [DAYZ_MODS.cot, 'Community Online Tools']]) {
+      if (mods.includes(id) && !(mods.includes(DAYZ_MODS.cf) && mods.indexOf(DAYZ_MODS.cf) < mods.indexOf(id))) ctx.addIssue({ code: 'custom', message: `${name} (${id}) benötigt Community Framework (${DAYZ_MODS.cf}) weiter vorne in der Mod-Liste.` });
+    }
+    if (profile.adminSteamIds?.length && !mods.includes(DAYZ_MODS.vpp)) ctx.addIssue({ code: 'custom', message: `DayZ vergibt Steam-ID-Adminrechte über VPPAdminTools. Bitte CF (${DAYZ_MODS.cf}) und VPPAdminTools (${DAYZ_MODS.vpp}) in die Mod-Liste aufnehmen.` });
+    if (mods.includes(DAYZ_MODS.vpp) && !profile.adminPassword) ctx.addIssue({ code: 'custom', message: 'VPPAdminTools benötigt ein Adminpasswort mit 8–32 Zeichen.' });
+  }
   if (profile.gameId === 'terraria' && profile.version !== '1.4.5.8') ctx.addIssue({ code: 'custom', message: 'Diese Terraria-Vorlage unterstützt Version 1.4.5.8.' });
   if (profile.gameId === 'factorio' && profile.version !== '2.1.24') ctx.addIssue({ code: 'custom', message: 'Diese Factorio-Vorlage unterstützt Version 2.1.24.' });
   if (profile.gameId !== 'minecraft' && (profile.modpackId || profile.modpackVersion)) ctx.addIssue({ code: 'custom', message: 'Minecraft-Modpacks sind nur für Minecraft erlaubt.' });

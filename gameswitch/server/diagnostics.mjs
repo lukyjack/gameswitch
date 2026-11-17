@@ -10,6 +10,9 @@ const stages = new Set(['request', 'response', 'middleware', 'handler', 'persist
 const games = new Set(['minecraft', 'gmod', 'squad', 'valheim', 'terraria', 'factorio', 'fs25']);
 games.add('arma3'); games.add('dayz');
 reasons.add('steam_library_required'); reasons.add('steam_mods_required');
+reasons.add('port_conflict'); reasons.add('admin_password_required');
+operations.add('update'); operations.add('admin-password');
+stages.add('Server & Mods aktualisieren');
 codes.add('STEAM_INPUT_UNCERTAIN');
 const trustedFiles = new Set(['app.mjs', 'controller.mjs', 'runtime.mjs', 'diagnostics.mjs', 'store.mjs', 'catalog.mjs', 'templates.mjs', 'game-ports.mjs', 'profile-secrets.mjs', 'game-admin.mjs', 'console-command.mjs', 'rcon-client.mjs', 'steam-cache.mjs', 'minecraft-memory.mjs']);
 trustedFiles.add('steam-setup.mjs');
@@ -87,6 +90,8 @@ export function networkFailure(error) {
 const messages = {
   steam_library_required: 'Steam-Einrichtung erforderlich. Die Serverdateien zuerst über „Steam einrichten“ im Panel vorbereiten. Die laufende Instanz bleibt aktiv.',
   steam_mods_required: 'Ausgewählte Workshop-Mods sind noch nicht vorbereitet. Die geschützte Steam-Bibliothek zuerst ergänzen. Die laufende Instanz bleibt aktiv.',
+  port_conflict: 'Ein anderes laufendes Profil nutzt dieselben Ports. Dieses zuerst stoppen oder das Update im laufenden Profil selbst starten.',
+  admin_password_required: 'VPPAdminTools benötigt ein Adminpasswort. Bitte im Adminbereich des Profils ein Adminpasswort festlegen. Die laufende Instanz bleibt aktiv.',
   backup_unsafe_links: 'Die Sicherung wurde wegen unsicherer Datei-Verknüpfungen angehalten. Bitte die Steam-Cache-Pflege prüfen; es wird keine weitere Instanz gestartet.',
   steam_cache_unexpected: 'Der Steam-Cache konnte nicht sicher bereinigt werden. Bitte die vorhandenen Serverdateien prüfen.',
   disk_full: 'Für die Aktion ist zu wenig Speicherplatz verfügbar. Bitte freien Speicher prüfen.',

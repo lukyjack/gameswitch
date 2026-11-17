@@ -19,7 +19,7 @@ test('game catalog declares accurate administration/console capabilities and una
   assert.deepEqual(catalog.map(game => game.id), ['minecraft', 'gmod', 'arma3', 'dayz', 'squad', 'valheim', 'terraria', 'factorio', 'fs25']);
   for (const game of catalog) {
     assert.equal(typeof game.available, 'boolean'); assert.equal(typeof game.consoleInput, 'boolean');
-    assert.ok(['minecraft', 'ulx', 'arma3', 'valheim', 'squad', 'none'].includes(game.adminKind));
+    assert.ok(['minecraft', 'ulx', 'arma3', 'dayz', 'valheim', 'squad', 'none'].includes(game.adminKind));
   }
   assert.equal(catalog.find(game => game.id === 'valheim').consoleInput, false);
   assert.match(catalog.find(game => game.id === 'squad').notice, /Custom Browser/);
@@ -148,11 +148,15 @@ test('profile secrets remain separate, atomically merge private files and return
   const id = randomUUID();
   assert.deepEqual(await readProfileSecrets(config, id), {});
   const first = await writeProfileSecrets(config, id, { serverPassword: 'First_Test_Only_Password' });
-  assert.deepEqual(first, { serverPasswordSet: true, rconPasswordSet: false });
+  assert.deepEqual(first, { serverPasswordSet: true, rconPasswordSet: false, adminPasswordSet: false });
   const second = await writeProfileSecrets(config, id, { rconPassword: 'Second_Test_Only_Password' });
-  assert.deepEqual(second, { serverPasswordSet: true, rconPasswordSet: true });
+  assert.deepEqual(second, { serverPasswordSet: true, rconPasswordSet: true, adminPasswordSet: false });
   assert.deepEqual(await readProfileSecrets(config, id), { serverPassword: 'First_Test_Only_Password', rconPassword: 'Second_Test_Only_Password' });
   assert.deepEqual(await getProfileSecretFlags(config, id), second);
+  const third = await writeProfileSecrets(config, id, { adminPassword: 'Admin_Test_Only_1' });
+  assert.deepEqual(third, { serverPasswordSet: true, rconPasswordSet: true, adminPasswordSet: true });
+  assert.equal((await readProfileSecrets(config, id)).adminPassword, 'Admin_Test_Only_1');
+  await assert.rejects(writeProfileSecrets(config, id, { adminPassword: 'x'.repeat(33) }));
   const file = path.join(directory, 'profile-secrets', `${id}.json`);
   assert.deepEqual((await fs.readdir(path.dirname(file))).sort(), [`${id}.json`]);
   if (process.platform !== 'win32') {

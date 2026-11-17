@@ -111,11 +111,15 @@ export function buildArmaDefinition(profile, config, runtimeName, environment) {
     'test ! -L /pufferpanel/mods; test ! -L /pufferpanel/keys',
     'test -d /gameswitch-library/server',
     rejectUnsafeTree('/gameswitch-library/server'),
+    ...mods.flatMap(id => [`test -d /gameswitch-library/mods/${id}`, rejectUnsafeTree(`/gameswitch-library/mods/${id}`)]),
+    // Install and "Server & Mods aktualisieren" share these steps: mods and
+    // keys are rebuilt from the library so stale PBOs or rotated keys of an
+    // updated mod cannot remain. Profiles and arma/*.cfg are kept.
+    'rm -rf /pufferpanel/mods /pufferpanel/keys',
     'cp -R --no-preserve=ownership /gameswitch-library/server/. /pufferpanel/',
+    'test ! -L /pufferpanel/mods; test ! -L /pufferpanel/keys',
     'mkdir -p /pufferpanel/mods /pufferpanel/keys',
     ...mods.flatMap(id => [
-      `test -d /gameswitch-library/mods/${id}`,
-      rejectUnsafeTree(`/gameswitch-library/mods/${id}`),
       `cp -R --no-preserve=ownership /gameswitch-library/mods/${id} /pufferpanel/mods/`,
       `for key in /gameswitch-library/mods/${id}/keys/*.bikey; do if [ -f "$key" ]; then dest="/pufferpanel/keys/$(basename "$key")"; if [ -e "$dest" ] && ! cmp -s "$key" "$dest"; then echo "Conflicting game signature keys" >&2; exit 1; fi; cp --no-preserve=ownership "$key" "$dest"; fi; done`,
     ]),

@@ -132,6 +132,48 @@ class SteamLibraryTests(unittest.TestCase):
         with self.assertRaises(library.LibraryError):
             library.docker_command("untrusted/image:latest", "gameswitch-steam-prepare-fixture", Path("/p"), Path("/d"), Path("/s"))
 
+    def test_dayz_runtime_image_adds_native_libraries_and_cannot_be_pulled_from_a_registry(self):
+        self.assertEqual(library.DAYZ_RUNTIME_IMAGE, "gameswitch.invalid/dayz-runtime:1")
+        dockerfile = library.DAYZ_RUNTIME_DOCKERFILE
+        self.assertTrue(dockerfile.startswith(f"FROM {library.IMAGE}\n"))
+        for package in ["libcurl4t64", "libcap2", "--no-install-recommends"]:
+            self.assertIn(package, dockerfile)
+        for forbidden in ["COPY", "ADD", "curl http", "wget", "password"]:
+            self.assertNotIn(forbidden, dockerfile)
+        image = "sha256:" + "b" * 64
+        with mock.patch.object(library.subprocess, "run") as run, mock.patch.object(library, "run_json", return_value=[{"Id": image}]):
+            self.assertEqual(library.build_runtime_image(), image)
+        args = run.call_args.args[0]
+        self.assertEqual(args, ["docker", "build", "--quiet", "--tag", library.DAYZ_RUNTIME_IMAGE, "-"])
+        self.assertEqual(run.call_args.kwargs["input"], dockerfile)
+        with mock.patch.object(library.subprocess, "run", side_effect=library.subprocess.CalledProcessError(1, "docker")):
+            with self.assertRaises(library.LibraryError):
+                library.build_runtime_image()
+
+    def test_dayz_runtime_check_is_isolated_and_reports_only_library_names(self):
+        image = "sha256:" + "c" * 64
+        args = library.runtime_check_command(image, Path("/var/lib/gameswitch-libraries/.dayz-build-x/server"))
+        for flag in ["--network=none", "--read-only", "--cap-drop=ALL", "--pull=never", "--log-driver=none", "1000:1000", "LD_LIBRARY_PATH=/srv:/srv/linux64"]:
+            self.assertIn(flag, args)
+        self.assertIn("type=bind,source=/var/lib/gameswitch-libraries/.dayz-build-x/server,target=/srv,readonly", args)
+        self.assertEqual(args[-3:], ["/usr/bin/ldd", image, "/srv/DayZServer"])
+        with self.assertRaises(library.LibraryError):
+            library.runtime_check_command("dayz-runtime:latest", Path("/srv"))
+        output = "\tlinux-vdso.so.1 (0x00007ffd)\n\tlibcurl.so.4 => not found\n\tlibcap.so.2 => not found\n\t$(evil) => not found\n\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6\n"
+        self.assertEqual(library.missing_libraries(output), ["libcap.so.2", "libcurl.so.4", "unbekannt"])
+        server = Path("/srv")
+        complete = types.SimpleNamespace(returncode=0, stdout="\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6\n", stderr="")
+        with mock.patch.object(library.subprocess, "run", return_value=complete):
+            library.verify_runtime(server, image)
+        incomplete = types.SimpleNamespace(returncode=0, stdout=output, stderr="")
+        with mock.patch.object(library.subprocess, "run", return_value=incomplete):
+            with self.assertRaisesRegex(library.LibraryError, "libcurl.so.4"):
+                library.verify_runtime(server, image)
+        broken = types.SimpleNamespace(returncode=1, stdout="", stderr="not a dynamic executable")
+        with mock.patch.object(library.subprocess, "run", return_value=broken):
+            with self.assertRaises(library.LibraryError):
+                library.verify_runtime(server, image)
+
     def test_running_library_binds_and_unknown_lifecycle_state_block_publication(self):
         self.assertTrue(library.library_in_use([{"Mounts": [{"Source": "/var/lib/gameswitch-libraries/arma3"}]}]))
         self.assertTrue(library.library_in_use([{"Mounts": [{"Source": "/var/lib/gameswitch-libraries/dayz/server"}]}]))

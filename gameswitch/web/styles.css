@@ -4006,3 +4006,34 @@ input[type="range"]::-webkit-slider-thumb {
     transition: none !important;
   }
 }
+.profile-update {
+  display: grid;
+  gap: 7px;
+  margin-top: 13px;
+  border-top: 1px solid #2c3644;
+  padding-top: 12px;
+  color: #a9b6c7;
+  font-size: 10px;
+  line-height: 1.6;
+}
+.profile-update.is-available {
+  border-top-color: #354239;
+  color: #c9eddb;
+}
+.profile-update .button {
+  width: 100%;
+  justify-content: center;
+}
+.dayz-admin-mod {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+.dayz-admin-mod .button {
+  justify-self: start;
+}
+.dayz-admin-mod small {
+  font-size: 9px;
+  line-height: 1.7;
+  color: #6d849d;
+}

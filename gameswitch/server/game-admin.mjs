@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { DAYZ_MODS, VPP_SUPERADMINS_DIRECTORY, VPP_SUPERADMINS_FILE, dayzUsesVpp, mergeVppSuperAdmins } from './dayz.mjs';
 
 const steamBase = 76561197960265728n;
 const maximumAccount = 0xffffffffn;
@@ -21,7 +22,8 @@ export function canonicalSteamId(input) {
 }
 
 export function buildAdminAction(profile, input) {
-  if (!['gmod', 'valheim', 'squad', 'arma3'].includes(profile?.gameId)) invalid('Für dieses Spiel gibt es keinen Steam-Admin-Helfer.');
+  if (!['gmod', 'valheim', 'squad', 'arma3', 'dayz'].includes(profile?.gameId)) invalid('Für dieses Spiel gibt es keinen Steam-Admin-Helfer.');
+  if (profile.gameId === 'dayz' && !dayzUsesVpp(profile)) invalid(`Vanilla DayZ vergibt keine Adminrechte per Steam-ID. Dafür benötigt das Profil CF (${DAYZ_MODS.cf}) und VPPAdminTools (${DAYZ_MODS.vpp}); ohne Mod hilft das Adminpasswort mit #login.`);
   const parsed = adminInput.safeParse(input);
   if (!parsed.success) invalid('Erlaubt sind nur Steam-ID und eine gültige Rolle.');
   const { role } = parsed.data;
@@ -32,6 +34,10 @@ export function buildAdminAction(profile, input) {
     notice: 'ULX-Befehl übermittelt. Bitte das Ergebnis in der Konsole prüfen.',
   };
   if (role === 'superadmin') invalid('Dieses Spiel unterstützt hier nur die Rollen Admin und Spieler.');
+  if (profile.gameId === 'dayz') return {
+    kind: 'file', path: VPP_SUPERADMINS_FILE, directory: VPP_SUPERADMINS_DIRECTORY, identity: steamId64, role,
+    notice: 'Die VPP-Superadminliste wurde gespeichert. Sie gilt beim nächsten Start; im Spiel öffnet sich VPPAdminTools nach Eingabe des Adminpassworts. Es wurde kein Neustart ausgelöst.',
+  };
   if (profile.gameId === 'arma3') return {
     kind: 'file', path: 'arma/admins.cfg', identity: steamId64, role,
     notice: 'Die Adminliste wurde gespeichert. Sie gilt beim nächsten Start; danach im Spiel mit #login anmelden. Es wurde kein Neustart ausgelöst.',
@@ -150,6 +156,7 @@ export function mergeAdminFile(action, original) {
     if (result.length > 20) invalid('Maximal 20 Arma-Administratoren erlaubt.');
     return `admins[] = {${result.map(id => JSON.stringify(id)).join(',')}};\n`;
   }
+  if (action.path === VPP_SUPERADMINS_FILE) return mergeVppSuperAdmins(original, action.identity, action.role);
   let merge;
   if (action.path === 'saves/adminlist.txt' && typeof action.identity === 'string' && action.identity.startsWith('Steam_')) {
     if (canonicalSteamId(action.identity.slice(6)).steamId64 !== action.identity.slice(6)) invalid('Ungültige Valheim-Identität.');

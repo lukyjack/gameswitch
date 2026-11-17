@@ -133,6 +133,32 @@ const defaultGamePlayers = (game) =>
     game?.maxPlayers || 128,
   );
 const bohemiaGame = (id) => ["arma3", "dayz"].includes(id);
+// Well-known DayZ Workshop items: Community Framework and VPPAdminTools.
+const DAYZ_CF = "1559212036";
+const DAYZ_VPP = "1828439124";
+const dayzUsesVpp = (profile) =>
+  Array.isArray(profile?.workshopIds) && profile.workshopIds.includes(DAYZ_VPP);
+// The Steam library replaces its mod set on every preparation. Offer the
+// mods of every profile of that game, so no other profile loses its mods.
+const workshopListHas = (text, id) =>
+  String(text || "").trim().split(/[\s,]+/u).includes(id);
+const withVppAdminMods = (text) => {
+  const ids = String(text || "").trim() ? String(text).trim().split(/[\s,]+/u) : [];
+  const rest = ids.filter((id) => id !== DAYZ_CF && id !== DAYZ_VPP);
+  return [DAYZ_CF, DAYZ_VPP, ...rest].join(",");
+};
+const libraryMods = (gameId, profiles = [], first = []) => {
+  const ids = [];
+  for (const id of [
+    ...first,
+    ...profiles
+      .filter((profile) => profile.gameId === gameId)
+      .flatMap((profile) => profile.workshopIds || []),
+  ])
+    if (typeof id === "string" && /^[1-9][0-9]{4,19}$/.test(id) && !ids.includes(id))
+      ids.push(id);
+  return ids.slice(0, 30);
+};
 const bohemiaMissions = {
   arma3: [
     ["MP_COOP_m01.Stratis", "Escape From Stratis · Koop"],
@@ -169,9 +195,15 @@ const profileCapabilities = (profile, state) => {
     (id) => !preparedMods.includes(id),
   );
   const setupRequired = setup?.ready !== true || missingMods.length > 0;
+  const updateAvailable =
+    profile.installed === true &&
+    setup?.ready === true &&
+    typeof setup.updatedAt === "string" &&
+    profile.libraryUpdatedAt !== setup.updatedAt;
   return {
     ...game,
     setupRequired,
+    updateAvailable,
     setupReason: setup?.ready !== true
       ? setup?.reason || "Steam-Einrichtung wird vor dem ersten Start benötigt."
       : `${missingMods.length} ausgewählte Workshop-Mods müssen auf dem Host vorbereitet werden.`,
@@ -520,7 +552,7 @@ function App() {
           <div className="topbar-right">
             <button
               className="button subtle steam-topbar-button"
-              onClick={() => setSteamSetup({ gameId: "arma3", workshopIds: [] })}
+              onClick={() => setSteamSetup({ gameId: "arma3", workshopIds: libraryMods("arma3", profiles) })}
               aria-label="Steam einrichten"
               title="Steam einrichten"
             >
@@ -839,7 +871,11 @@ function App() {
                             onBackup={() =>
                               setModal({ type: "backup", profile })
                             }
-                            onSteamSetup={() => setSteamSetup({ gameId: profile.gameId, workshopIds: profile.workshopIds || [] })}
+                            onUpdate={() => {
+                              setError("");
+                              setModal({ type: "update", profile });
+                            }}
+                            onSteamSetup={() => setSteamSetup({ gameId: profile.gameId, workshopIds: libraryMods(profile.gameId, profiles, profile.workshopIds || []) })}
                           />
                         ))}
                       <button
@@ -958,7 +994,7 @@ function App() {
                 </section>
               )}
               {tab === "security" && (
-                <Security state={state} sandbox={sandbox} onSteamSetup={() => setSteamSetup({ gameId: "arma3", workshopIds: [] })} />
+                <Security state={state} sandbox={sandbox} onSteamSetup={() => setSteamSetup({ gameId: "arma3", workshopIds: libraryMods("arma3", profiles) })} />
               )}
             </>
           )}
@@ -983,7 +1019,7 @@ function App() {
           runtimeSetup={state?.runtimeSetup}
           sandbox={sandbox}
           initialGameId={modal.gameId}
-          onSteamSetup={(gameId, workshopIds) => setSteamSetup({ gameId, workshopIds })}
+          onSteamSetup={(gameId, workshopIds) => setSteamSetup({ gameId, workshopIds: libraryMods(gameId, profiles, workshopIds) })}
           onClose={() => setModal(null)}
           onUnauthorized={() => {
             csrfToken = "";
@@ -1098,6 +1134,7 @@ function App() {
         <SteamSetup
           initialGameId={steamSetup.gameId}
           initialWorkshopIds={steamSetup.workshopIds}
+          modsByGame={{ arma3: libraryMods("arma3", profiles), dayz: libraryMods("dayz", profiles) }}
           locked={busy || runningJob}
           onClose={() => setSteamSetup(null)}
           onComplete={refresh}
@@ -1121,7 +1158,7 @@ const steamConsoleText = (value) => value
   .replace(/\r/g, "\n")
   .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, "");
 
-function SteamSetup({ initialGameId, initialWorkshopIds = [], locked, onClose, onComplete, onUnauthorized }) {
+function SteamSetup({ initialGameId, initialWorkshopIds = [], modsByGame = {}, locked, onClose, onComplete, onUnauthorized }) {
   const [gameId, setGameId] = useState(bohemiaGame(initialGameId) ? initialGameId : "arma3");
   const [workshopText, setWorkshopText] = useState(Array.isArray(initialWorkshopIds) ? initialWorkshopIds.join(",") : "");
   const [status, setStatus] = useState(null);
@@ -1266,10 +1303,10 @@ function SteamSetup({ initialGameId, initialWorkshopIds = [], locked, onClose, o
         {complete && <div className="alert alert-success" role="status"><CheckCheck size={18} /><span>{gameName(session.gameId)}: Serverdateien vorbereitet. Die Spielprofile können ihre Bereitschaft jetzt erneut prüfen.</span></div>}
         <form onSubmit={start} className="steam-start-form">
           <div className="form-row">
-            <label>Spiel<select value={gameId} onChange={e => setGameId(e.target.value)} disabled={active || Boolean(pending)}><option value="arma3">Arma 3</option><option value="dayz">DayZ</option></select></label>
+            <label>Spiel<select value={gameId} onChange={e => { setGameId(e.target.value); setWorkshopText((modsByGame[e.target.value] || []).join(",")); }} disabled={active || Boolean(pending)}><option value="arma3">Arma 3</option><option value="dayz">DayZ</option></select></label>
             <label>Workshop-Mod-IDs <span>optional</span><input value={workshopText} onChange={e => setWorkshopText(e.target.value)} disabled={active || Boolean(pending)} maxLength={650} placeholder="z. B. 450814997,463939057" autoComplete="off" /></label>
           </div>
-          <p className="steam-setup-help">Bis zu 30 einzelne Mod-IDs, in Ladereihenfolge und mit Abhängigkeiten. Ohne IDs wird der unveränderte Server vorbereitet.</p>
+          <p className="steam-setup-help">Bis zu 30 einzelne Mod-IDs, in Ladereihenfolge und mit Abhängigkeiten. Die Liste ist mit den Mods aller Profile dieses Spiels vorbelegt: Die Bibliothek enthält danach genau diese Mods. Ohne IDs wird der unveränderte Server vorbereitet. Ein erneutes Einrichten lädt auch Server- und Mod-Updates; danach am Profil „Server &amp; Mods aktualisieren“ wählen.</p>
           {!active && <button className="button primary" disabled={Boolean(pending) || locked || status?.enabled !== true}>{pending === "start" ? <LoaderCircle size={16} className="spin" /> : <Gamepad2 size={16} />}Steam-Anmeldung öffnen</button>}
           {locked && !active && <p className="steam-setup-help">Bitte zuerst die laufende Spielaktion abwarten.</p>}
         </form>
@@ -1302,6 +1339,7 @@ function ConsoleInput({
   const [player, setPlayer] = useState("");
   const [steamId, setSteamId] = useState("");
   const [role, setRole] = useState("admin");
+  const [adminPasswordInput, setAdminPasswordInput] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -1312,8 +1350,12 @@ function ConsoleInput({
   const minecraft = isMinecraft(profile);
   const canInput = game.consoleInput === true;
   const adminKind = game.adminKind || "none";
-  const hasSteamAdmin = ["ulx", "valheim", "squad", "arma3"].includes(adminKind);
-  const fileAdmin = ["valheim", "squad", "arma3"].includes(adminKind);
+  const vppAdmin = adminKind === "dayz" && dayzUsesVpp(profile);
+  const hasSteamAdmin = ["ulx", "valheim", "squad", "arma3"].includes(adminKind) || vppAdmin;
+  const fileAdmin = ["valheim", "squad", "arma3"].includes(adminKind) || vppAdmin;
+  const dayzPasswordUnavailable =
+    locked || (profile.installed === true && profile.status !== "stopped");
+  const validAdminPassword = /^[A-Za-z0-9_-]{8,32}$/.test(adminPasswordInput);
   const unavailable = locked || profile.status !== "running";
   const adminUnavailable =
     locked ||
@@ -1382,6 +1424,30 @@ function ConsoleInput({
       setNotice(
         `${result.notice || "Anfrage angenommen."}${result.requiresRestart ? " Die Liste gilt beim nächsten Start des Profils." : result.simulated ? " In der Sandbox simuliert." : " Die Serverausgabe zeigt die Rückmeldung."}`,
       );
+      await onSent();
+    } catch (e) {
+      if (e.status === 401) onUnauthorized();
+      else setError(e.message);
+    } finally {
+      sendingLock.current = false;
+      setSending(false);
+    }
+  };
+
+  const saveAdminPassword = async (event) => {
+    event.preventDefault();
+    if (sendingLock.current || dayzPasswordUnavailable || !validAdminPassword) return;
+    sendingLock.current = true;
+    setSending(true);
+    setError("");
+    setNotice("");
+    try {
+      const result = await api(
+        `/profiles/${encodeURIComponent(profile.id)}/admin-password`,
+        { method: "POST", body: { password: adminPasswordInput } },
+      );
+      setAdminPasswordInput("");
+      setNotice(result.notice || "Adminpasswort gespeichert.");
       await onSent();
     } catch (e) {
       if (e.status === 401) onUnauthorized();
@@ -1580,12 +1646,16 @@ function ConsoleInput({
               <strong>
                 {adminKind === "ulx"
                   ? "ULX-Administrator verwalten"
-                  : "Administratorliste verwalten"}
+                  : vppAdmin
+                    ? "VPP-Superadministratoren verwalten"
+                    : "Administratorliste verwalten"}
               </strong>
               <p>
                 {adminKind === "ulx"
                   ? "ULX und ULib müssen bereits auf diesem Server geladen sein."
-                  : "Die gespeicherte Administratorliste wird beim nächsten Profilstart verwendet."}
+                  : vppAdmin
+                    ? "Superadmins erhalten in VPPAdminTools alle Rechte. Die Liste gilt beim nächsten Profilstart."
+                    : "Die gespeicherte Administratorliste wird beim nächsten Profilstart verwendet."}
               </p>
             </div>
           </div>
@@ -1685,11 +1755,61 @@ function ConsoleInput({
         </p>
       )}
       {profile.gameId === "dayz" && (
-        <p className="console-help">
-          Die DayZ-Serverausgabe ist hier lesbar. Ingame-Adminmenüs benötigen
-          einen passenden Adminmod und dessen Berechtigungskonfiguration. Eine
-          Steam-ID allein vergibt in Vanilla DayZ keine Administratorrechte.
-        </p>
+        <form className="console-operator-form" onSubmit={saveAdminPassword} autoComplete="off">
+          <div className="console-operator-title">
+            <LockKeyhole size={18} />
+            <div>
+              <strong>Adminpasswort {profile.adminPasswordSet ? "ändern" : "festlegen"}</strong>
+              <p>
+                Gilt für <code>#login</code> im Spielchat
+                {vppAdmin ? " und als Passwort für das VPPAdminTools-Menü" : ""}.
+                {profile.adminPasswordSet ? " Ein Passwort ist bereits gesetzt." : " Noch kein Adminpasswort gesetzt."}
+              </p>
+            </div>
+          </div>
+          {profile.installed === true && (
+            <p className="console-help console-disabled" role="status">
+              {profile.status === "stopped"
+                ? "Das Profil ist gestoppt; das Passwort kann gesetzt werden."
+                : "Zum Ändern zuerst das Profil über die Profilsteuerung stoppen."}{" "}
+              Das Speichern startet den Server nicht.
+            </p>
+          )}
+          <label htmlFor="dayz-admin-password">Neues Adminpasswort</label>
+          <div className="console-input-row console-operator-row">
+            <input
+              id="dayz-admin-password"
+              type="password"
+              value={adminPasswordInput}
+              onChange={(event) => setAdminPasswordInput(event.target.value)}
+              minLength={8}
+              maxLength={32}
+              pattern={"[A-Za-z0-9_\\-]{8,32}"}
+              required
+              disabled={dayzPasswordUnavailable || sending}
+              autoComplete="new-password"
+              autoCapitalize="none"
+              spellCheck={false}
+              placeholder="8–32 Zeichen"
+              aria-describedby="dayz-admin-password-help"
+            />
+            <button
+              className="button primary-soft"
+              type="submit"
+              disabled={dayzPasswordUnavailable || sending || !validAdminPassword}
+            >
+              {sending ? <LoaderCircle className="spin" size={15} /> : <LockKeyhole size={15} />}
+              Passwort speichern
+            </button>
+          </div>
+          <p className="console-help" id="dayz-admin-password-help">
+            8–32 Buchstaben, Zahlen, Unterstriche oder Bindestriche. Das
+            Passwort wird nicht wieder angezeigt.{" "}
+            {vppAdmin
+              ? "Im Spiel öffnet die in den Steuerungsoptionen unter VPPAdminTools hinterlegte Taste das Menü; dort das Adminpasswort eingeben. Ohne eingetragene Superadmins bleibt das Menü gesperrt."
+              : "Im Spiel den Chat öffnen und #login Adminpasswort eingeben. Für ein Ingame-Adminmenü CF und VPPAdminTools in einem DayZ-Profil auswählen."}
+          </p>
+        </form>
       )}
       {!canInput && !hasSteamAdmin && !bohemiaGame(profile.gameId) && (
         <p className="console-help">
@@ -1854,6 +1974,7 @@ function ProfileCard({
   onConsole,
   onRestart,
   onBackup,
+  onUpdate,
   onSteamSetup,
 }) {
   const minecraft = isMinecraft(profile);
@@ -1984,6 +2105,23 @@ function ProfileCard({
             <p>Danach wird der Start automatisch freigegeben.</p>
           </div>
         )}
+        {bohemiaGame(profile.gameId) && profile.installed && !game?.setupRequired && (
+          <div className={`profile-update ${game?.updateAvailable ? "is-available" : ""}`} role={game?.updateAvailable ? "status" : undefined}>
+            {game?.updateAvailable && (
+              <p>Neue Serverdateien oder Mods sind vorbereitet. Mit dem Update übernimmt dieses Profil sie.</p>
+            )}
+            <button
+              className="button subtle"
+              type="button"
+              disabled={disabled || profile.status === "unknown" || game?.available === false}
+              onClick={onUpdate}
+              aria-label={`Server und Mods für ${profile.name} aktualisieren`}
+            >
+              <RefreshCw size={15} />
+              Server &amp; Mods aktualisieren
+            </button>
+          </div>
+        )}
       </div>
     </article>
   );
@@ -2013,12 +2151,16 @@ function JobProgress({ job, profiles }) {
             {job.status === "running"
               ? job.type === "restart"
                 ? "Neustart läuft."
-                : "Dein Server macht sich bereit."
+                : job.type === "update"
+                  ? "Server und Mods werden aktualisiert."
+                  : "Dein Server macht sich bereit."
               : job.status === "failed"
                 ? "Vorgang sicher angehalten."
                 : job.type === "restart"
                   ? "Serverprozess neu gestartet."
-                  : job.type === "activate"
+                  : job.type === "update"
+                    ? "Server und Mods aktualisiert."
+                    : job.type === "activate"
                     ? "Serverprozess gestartet."
                     : "Vorgang abgeschlossen."}
           </h3>
@@ -2029,7 +2171,9 @@ function JobProgress({ job, profiles }) {
               : job.status === "completed"
                 ? ["restart", "activate"].includes(job.type)
                   ? " · Die Welt kann noch laden; die Konsole zeigt den Fortschritt."
-                  : " · Vorgang abgeschlossen"
+                  : job.type === "update"
+                    ? " · Welt, Profile und Serverkonfiguration blieben erhalten; vorher wurde ein Backup erstellt."
+                    : " · Vorgang abgeschlossen"
                 : " · Du kannst den Fortschritt hier verfolgen."}
           </p>
         </div>
@@ -2390,6 +2534,7 @@ function ConfirmModal({
   const type = modal.type;
   const restore = type === "restore";
   const restart = type === "restart";
+  const update = type === "update";
   const target = restore
     ? profiles.find((p) => p.id === modal.backup.profileId)
     : modal.profile;
@@ -2401,11 +2546,14 @@ function ConfirmModal({
   const targetSetup = target
     ? profileCapabilities(target, { catalog, runtimeSetup, mode: sandbox ? "sandbox" : "pufferpanel" })
     : null;
-  const setupUnavailable = ["activate", "restart"].includes(type) && targetSetup?.setupRequired;
+  const setupUnavailable = ["activate", "restart", "update"].includes(type) && targetSetup?.setupRequired;
+  const updateRunning = update && profiles.find((profile) => profile.id === target?.id)?.status === "running";
   const confirmDisabled = busy || runningJob || restartUnavailable || setupUnavailable;
   const title = restore
     ? "Spielstand wiederherstellen?"
-    : restart
+    : update
+      ? "Server & Mods aktualisieren?"
+      : restart
       ? "Server neu starten?"
       : type === "stop"
         ? "Session beenden?"
@@ -2434,9 +2582,9 @@ function ConfirmModal({
           </div>
         )}
         <div
-          className={`confirm-symbol ${type === "stop" || restart ? "amber" : ""}`}
+          className={`confirm-symbol ${type === "stop" || restart || update ? "amber" : ""}`}
         >
-          {restore ? (
+          {restore || update ? (
             <RefreshCw size={29} />
           ) : restart ? (
             <RefreshCw size={29} />
@@ -2459,6 +2607,38 @@ function ConfirmModal({
               <ShieldCheck size={18} />
               Vorher wird der aktuelle Stand als Sicherheitsbackup gesichert.
             </div>
+          </>
+        ) : update ? (
+          <>
+            <p>
+              <strong>{target?.name}</strong> übernimmt die zuletzt über „Steam
+              einrichten“ vorbereiteten Serverdateien und Workshop-Mods.
+              {updateRunning ? " Verbundene Spieler werden dabei getrennt." : " Das Profil bleibt danach gestoppt."}
+            </p>
+            <div className="switch-flow">
+              {(updateRunning
+                ? ["Speichern & sauber stoppen", "Backup & Update", "Wieder starten"]
+                : ["Backup abschließen", "Server & Mods ersetzen", "Gestoppt lassen"]
+              ).map((label, index) => (
+                <div key={label}>
+                  <span>{index + 1}</span>
+                  <strong>{label}</strong>
+                  {index < 2 && <ChevronRight size={15} />}
+                </div>
+              ))}
+            </div>
+            <div className="inline-note">
+              <ShieldCheck size={18} />
+              Welt- und Charakterstand, Admin-Mod-Daten, Logs und die
+              Serverkonfiguration bleiben erhalten. Mods und Signaturschlüssel
+              werden vollständig aus der Bibliothek neu aufgebaut; geänderte
+              Standard-Missionsdateien werden auf den Stand des Spiels gesetzt.
+            </div>
+            <p className="restart-duration-note">
+              Für neue Spiel- oder Mod-Versionen zuerst „Steam einrichten“
+              ausführen. Das Kopieren der Serverdateien kann einige Minuten
+              dauern.
+            </p>
           </>
         ) : restart ? (
           <>
@@ -2569,14 +2749,16 @@ function ConfirmModal({
             <LoaderCircle className="spin" size={16} />
           ) : type === "stop" ? (
             <Square size={14} />
-          ) : restart ? (
+          ) : restart || update ? (
             <RefreshCw size={16} />
           ) : (
             <ArrowRight size={16} />
           )}
           {restore
             ? "Wiederherstellen"
-            : restart
+            : update
+              ? "Update starten"
+              : restart
               ? "Neustart bestätigen"
               : type === "stop"
                 ? "Session beenden"
@@ -2636,6 +2818,7 @@ function CreateProfile({
     mission: defaultGameMission(initial),
     workshopIds: "",
     adminSteamIds: "",
+    adminPassword: "",
   });
   const [versions, setVersions] = useState([]);
   const [packQuery, setPackQuery] = useState("");
@@ -2775,6 +2958,7 @@ function CreateProfile({
       mission: defaultGameMission(next),
       workshopIds: "",
       adminSteamIds: "",
+      adminPassword: "",
     }));
   };
   const selectPack = async (pack) => {
@@ -2865,8 +3049,12 @@ function CreateProfile({
           ? {
               mission: form.mission,
               workshopIds: parseIdList(form.workshopIds),
-              ...(game.id === "arma3"
+              ...(game.id === "arma3" ||
+              (game.id === "dayz" && workshopListHas(form.workshopIds, DAYZ_VPP) && form.adminSteamIds.trim())
                 ? { adminSteamIds: parseIdList(form.adminSteamIds, { steam: true }) }
+                : {}),
+              ...(game.id === "dayz" && form.adminPassword
+                ? { adminPassword: form.adminPassword }
                 : {}),
             }
           : {}),
@@ -3289,7 +3477,25 @@ function CreateProfile({
                     die oben ausgewählte Startmission nicht.
                   </small>
                 </label>
-                {game.id === "arma3" && (
+                {game.id === "dayz" && (
+                  <div className="dayz-admin-mod">
+                    <button
+                      type="button"
+                      className="button subtle"
+                      disabled={workshopListHas(form.workshopIds, DAYZ_VPP) && workshopListHas(form.workshopIds, DAYZ_CF)}
+                      onClick={() => update("workshopIds", withVppAdminMods(form.workshopIds))}
+                    >
+                      <ShieldCheck size={15} />
+                      Adminmenü VPPAdminTools hinzufügen
+                    </button>
+                    <small>
+                      Ergänzt Community Framework ({DAYZ_CF}) und VPPAdminTools
+                      ({DAYZ_VPP}) in der richtigen Reihenfolge. Danach Adminpasswort
+                      und Steam-ID-Admins unten eintragen.
+                    </small>
+                  </div>
+                )}
+                {(game.id === "arma3" || (game.id === "dayz" && workshopListHas(form.workshopIds, DAYZ_VPP))) && (
                   <label>
                     Administratoren <span className="optional">optional</span>
                     <textarea
@@ -3303,9 +3509,33 @@ function CreateProfile({
                       spellCheck={false}
                     />
                     <small>
-                      Bis zu 20 SteamID64. Eingetragene Spieler melden sich im
-                      Arma-Chat mit #login als Administrator an. Die Liste lässt
-                      sich später bei gestopptem Profil verwalten.
+                      {game.id === "dayz"
+                        ? "Bis zu 20 SteamID64. Sie werden VPP-Superadmins mit allen Rechten. Die Liste lässt sich später bei gestopptem Profil unter „Konsole & Admin“ verwalten."
+                        : "Bis zu 20 SteamID64. Eingetragene Spieler melden sich im Arma-Chat mit #login als Administrator an. Die Liste lässt sich später bei gestopptem Profil verwalten."}
+                    </small>
+                  </label>
+                )}
+                {game.id === "dayz" && (
+                  <label>
+                    Adminpasswort{" "}
+                    {!workshopListHas(form.workshopIds, DAYZ_VPP) && <span className="optional">optional</span>}
+                    <input
+                      type="password"
+                      required={workshopListHas(form.workshopIds, DAYZ_VPP)}
+                      minLength={8}
+                      maxLength={32}
+                      pattern={"[A-Za-z0-9_\\-]{8,32}"}
+                      autoComplete="new-password"
+                      value={form.adminPassword}
+                      onChange={(event) => update("adminPassword", event.target.value)}
+                      placeholder="Für #login und VPPAdminTools"
+                      spellCheck={false}
+                    />
+                    <small>
+                      8–32 Buchstaben, Zahlen, Unterstriche oder Bindestriche.
+                      Im Spiel mit #login Adminpasswort anmelden
+                      {workshopListHas(form.workshopIds, DAYZ_VPP) ? "; dasselbe Passwort öffnet das VPP-Adminmenü" : ""}.
+                      Wird danach nicht mehr angezeigt und lässt sich später ändern.
                     </small>
                   </label>
                 )}
@@ -3331,9 +3561,11 @@ function CreateProfile({
                 </label>
                 {game.id === "dayz" && (
                   <p className="console-help game-version-note">
-                    Ingame-Adminmenüs benötigen einen Adminmod und dessen
-                    Berechtigungskonfiguration. Diese Vorlage vergibt keine
-                    Vanilla-Adminrechte über Steam-ID.
+                    Vanilla DayZ kennt nur die Anmeldung mit #login und dem
+                    Adminpasswort. Ein Adminmenü mit Steam-ID-Rechten liefert
+                    VPPAdminTools. Andere Adminmods wie Community Online Tools
+                    benötigen CF davor und werden über ihre eigenen Dateien
+                    konfiguriert.
                   </p>
                 )}
               </>

@@ -7,7 +7,7 @@ import fs from 'node:fs/promises';
 import { randomBytes, randomUUID, scryptSync, timingSafeEqual, createHash } from 'node:crypto';
 import { readConfig } from './config.mjs';
 import { openStore } from './store.mjs';
-import { catalog, profileSchema, parseCollection, providers } from './catalog.mjs';
+import { catalog, profileSchema, adminPasswordSchema, parseCollection, providers } from './catalog.mjs';
 import { SandboxRuntime, PufferRuntime } from './runtime.mjs';
 import { Controller } from './controller.mjs';
 import { parseConsoleCommand, safeCommandVerb } from './console-command.mjs';
@@ -24,7 +24,7 @@ const digest = value => createHash('sha256').update(value).digest('hex');
 const hashPassword = (password, salt) => scryptSync(password, salt, 64, { N: 32768, maxmem: 64 * 1024 * 1024 }).toString('hex');
 const credentials = z.object({ username: z.string().regex(/^[a-zA-Z0-9_-]{3,32}$/), password: z.string().min(14).max(128) }).strict();
 const asyncRoute = callback => (req, res, next) => Promise.resolve(callback(req, res, next)).catch(next);
-const profileFields = ['id', 'name', 'gameId', 'version', 'loader', 'modpackId', 'modpackVersion', 'modpackName', 'modpackVersionName', 'javaVersion', 'minimumMemoryMb', 'recommendedMemoryMb', 'collectionId', 'gamemode', 'map', 'mission', 'workshopIds', 'adminSteamIds', 'maxPlayers', 'memoryMb', 'port', 'queryPort', 'beaconPort', 'worldName', 'serverId', 'installed', 'status', 'createdAt', 'serverPasswordSet', 'rconPasswordSet'];
+const profileFields = ['id', 'name', 'gameId', 'version', 'loader', 'modpackId', 'modpackVersion', 'modpackName', 'modpackVersionName', 'javaVersion', 'minimumMemoryMb', 'recommendedMemoryMb', 'collectionId', 'gamemode', 'map', 'mission', 'workshopIds', 'adminSteamIds', 'maxPlayers', 'memoryMb', 'port', 'queryPort', 'beaconPort', 'worldName', 'serverId', 'installed', 'status', 'createdAt', 'serverPasswordSet', 'rconPasswordSet', 'adminPasswordSet', 'libraryUpdatedAt'];
 const publicProfile = profile => ({
   ...Object.fromEntries(profileFields.filter(key => profile[key] !== undefined).map(key => [key, profile[key]])),
   consoleInput: catalog.find(game => game.id === profile.gameId)?.consoleInput ?? profile.gameId === 'minecraft',
@@ -217,19 +217,19 @@ export async function createApp(options = {}) {
       input.recommendedMemoryMb = selected.recommendedMemoryMb;
     }
     if (controller.busy || store.state.profiles.length >= 50) return res.status(409).json({ error: 'Profilanlage gerade nicht möglich. Bitte erneut versuchen.' });
-    const { serverPassword, ...settings } = input;
+    const { serverPassword, adminPassword, ...settings } = input;
     const profile = { ...settings, id: randomUUID(), serverId: randomUUID().replaceAll('-', '').slice(0, 16), installed: false, status: 'stopped', createdAt: new Date().toISOString() };
-    if (serverPassword || input.gameId === 'squad') {
-      const flags = await writeProfileSecrets(config, profile.id, { ...(serverPassword ? { serverPassword } : {}), ...(input.gameId === 'squad' ? { rconPassword: token() } : {}) });
+    if (serverPassword || adminPassword || input.gameId === 'squad') {
+      const flags = await writeProfileSecrets(config, profile.id, { ...(serverPassword ? { serverPassword } : {}), ...(adminPassword ? { adminPassword } : {}), ...(input.gameId === 'squad' ? { rconPassword: token() } : {}) });
       Object.assign(profile, flags);
     }
     if (controller.busy || store.state.profiles.length >= 50) return res.status(409).json({ error: 'Profilanlage gerade nicht möglich. Bitte erneut versuchen.' });
     store.state.profiles.push(profile); store.event(`Profil „${profile.name}“ angelegt.`); await store.save();
     res.status(201).json({ profile: publicProfile(profile) });
   }));
-  for (const action of ['activate', 'restart', 'stop', 'backup']) app.post(`/api/profiles/:id/${action}`, asyncRoute(async (req, res) => {
+  for (const action of ['activate', 'restart', 'stop', 'backup', 'update']) app.post(`/api/profiles/:id/${action}`, asyncRoute(async (req, res) => {
     if ((await steamSetup.status()).active) return res.status(409).json({ error: 'Steam-Einrichtung läuft. Vor einer Serveraktion deren Abschluss abwarten oder die Einrichtung abbrechen.' });
-    if (action === 'restart') z.object({}).strict().parse(req.body ?? {});
+    if (['restart', 'update'].includes(action)) z.object({}).strict().parse(req.body ?? {});
     res.status(202).json({ job: controller.begin(action, req.params.id, undefined, { requestId: req.requestId }) });
   }));
   app.post('/api/backups/:id/restore', asyncRoute(async (req, res) => {
@@ -279,6 +279,32 @@ export async function createApp(options = {}) {
         if (error.code === 'ADMIN_WRITE_UNCERTAIN') return failure(error, req, res, 502, 'Die Bestätigung der Adminliste fehlt. Bitte Konfiguration prüfen; es wird nicht automatisch erneut geschrieben.');
         throw error;
       }
+    } finally { controller.busy = false; }
+  }));
+  app.post('/api/profiles/:id/admin-password', consoleLimit, asyncRoute(async (req, res) => {
+    if (!store.healthy) return failure(Object.assign(new Error('Persistence unavailable'), { code: 'PERSISTENCE_UNAVAILABLE' }), req, res, 503, 'Persistenzfehler. Admin-Einstellungen sind bis zur Behebung gesperrt.');
+    if (controller.busy) return res.status(409).json({ error: 'Eine Serveraktion läuft bereits. Bitte kurz warten.' });
+    const profile = controller.profile(req.params.id);
+    if (profile.gameId !== 'dayz') return res.status(400).json({ error: 'Ein separates Adminpasswort wird hier nur für DayZ verwaltet.' });
+    const { password } = z.object({ password: adminPasswordSchema }).strict().parse(req.body);
+    controller.busy = true;
+    try {
+      // Never log or persist the value in events; only the action and its actor.
+      store.event(`Adminpasswort für „${profile.name}“ von ${req.session.username} angefordert.`);
+      await store.save();
+      let result;
+      try { result = await runtime.setAdminPassword(profile, password); }
+      catch (error) {
+        if (error.code === 'ADMIN_WRITE_UNCERTAIN') return failure(error, req, res, 502, error.message);
+        throw error;
+      }
+      Object.assign(profile, await writeProfileSecrets(config, profile.id, { adminPassword: password }));
+      store.event(`Adminpasswort für „${profile.name}“ gespeichert.`);
+      await store.save();
+      const notice = result.simulated ? 'Sandbox: Adminpasswort simuliert gespeichert; keine echte Serverkonfiguration verändert.'
+        : profile.installed ? 'Adminpasswort gespeichert. Es gilt ab dem nächsten Start für #login und – falls geladen – VPPAdminTools. Es wurde kein Neustart ausgelöst.'
+          : 'Adminpasswort gespeichert. Es wird bei der ersten Installation übernommen.';
+      res.json({ ok: true, notice, requiresRestart: Boolean(result.requiresRestart), profile: publicProfile(profile) });
     } finally { controller.busy = false; }
   }));
   app.get('/api/catalog/modpacks', asyncRoute(async (req, res) => res.json(await catalogProvider.search(z.string().max(100).parse(req.query.q || '')))));

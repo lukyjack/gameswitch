@@ -8,7 +8,7 @@ Diese Anleitung beschreibt den Betrieb auf einem einzelnen VPS. Die konkrete Zie
 - PufferPanel aus **diesem Fork** auf Loopback, Docker für Spiele. Die neue Backup-Schnittstelle ist Voraussetzung.
 - GameSwitch als eigener Systembenutzer ohne Docker-Rechte, nur auf `127.0.0.1:3001`.
 - HTTPS-Reverse-Proxy vor GameSwitch; Verwaltung bevorzugt zusätzlich auf VPN beschränken.
-- Nur benötigte Spielports veröffentlichen: typischerweise Minecraft TCP 25565, GMod TCP/UDP 27015. Arma 3 verwendet fünf aufeinanderfolgende UDP-Ports, standardmäßig 2302–2306; DayZ verwendet UDP Spielport und Spielport + 1 sowie den separaten Query-Port, standardmäßig 27016. Die tatsächlichen Profilports sind maßgeblich. PufferPanel 8080 und SFTP 5657 bleiben administrativ erreichbar.
+- Nur benötigte Spielports veröffentlichen: typischerweise Minecraft TCP 25565, GMod TCP/UDP 27015. Arma 3 verwendet fünf aufeinanderfolgende UDP-Ports, standardmäßig 2302–2306; DayZ verwendet UDP Spielport und Spielport + 1 sowie den separaten Query-Port, standardmäßig 27016 (Serverbrowser). Die tatsächlichen Profilports sind maßgeblich. PufferPanel 8080 und SFTP 5657 bleiben administrativ erreichbar.
 
 ## GameSwitch bauen
 
@@ -102,7 +102,28 @@ Der Helfer veröffentlicht ausschließlich bereinigte Server-/Moddateien und ein
 
 Arma 3 hält sein HOME einschließlich `.local/share` unter `arma-home` im Spielvolume; die Adminliste liegt im eingeschlossenen `arma/admins.cfg`. Die Datei nur über den Helfer bei bestätigtem Stopp ändern; nach dem nächsten Start können eingetragene Spieler im Spiel `#login` verwenden. DayZ hält Profile und RPT-/Verwaltungslogs unter `profiles`, den Welt-/Charakterzustand im Chernarus-Missionsbereich. Die Spielverzeichnisse gehören zu den vollständigen Backups; nur der verschachtelte `.steam`-Cache wird als Tmpfs ausgenommen. Das Spielpasswort ist zusätzlich im privaten GameSwitch-Geheimnisspeicher abgelegt. Für eine Hostwiederherstellung Panelzustand, Geheimnisspeicher und Bibliotheken berücksichtigen oder die Bibliotheken kontrolliert neu vorbereiten.
 
-Die Serverprotokolle beider Spiele sind im Panel lesbar. Ein BattlEye-RCON-Adapter ist hier nicht freigegeben; der Source/TCP-Adapter für andere Spiele wird nicht dafür verwendet. DayZ-Ingame-Adminmenüs erfordern einen vertrauenswürdigen Adminmod mit separater Berechtigungskonfiguration. Vor Freigabe müssen geordnetes Stoppen, Weltpersistenz und Backup/Restore mit der tatsächlich installierten Spielversion geprüft werden.
+Die Serverprotokolle beider Spiele sind im Panel lesbar. Ein BattlEye-RCON-Adapter ist hier nicht freigegeben; der Source/TCP-Adapter für andere Spiele wird nicht dafür verwendet. Vor Freigabe müssen geordnetes Stoppen, Weltpersistenz und Backup/Restore mit der tatsächlich installierten Spielversion geprüft werden.
+
+### DayZ-Laufzeitumgebung
+
+Der native `DayZServer` benötigt die Systembibliotheken `libcurl` und `libcap`, die im reinen `steamcmd/steamcmd`-Image fehlen. Der Steam-Bibliothekshelfer baut deshalb bei jeder DayZ-Einrichtung lokal das Image `gameswitch.invalid/dayz-runtime:1` aus dem bereits vorhandenen `steamcmd/steamcmd:latest` plus `libcurl4t64` und `libcap2` (Ubuntu-Paketquellen müssen erreichbar sein). Danach prüft er `ldd DayZServer` in genau diesem Image ohne Netzwerk und mit schreibgeschütztem Mount. Fehlen Bibliotheken, bricht die Einrichtung mit deren Namen ab und die bisherige Bibliothek bleibt erhalten. Erst danach trägt das Manifest `runtimeImage` ein; ohne diesen Eintrag meldet das Panel „Steam einrichten erneut ausführen“. Der Name mit der reservierten Domain `.invalid` kann nie aus einer Registry gezogen werden: Fehlt das lokale Image, schlägt der Start sicher fehl, statt ein fremdes Image zu laden. Nach einem Update dieses Repositorys den Hosthelfer neu installieren (`sudo install -o root -g root -m 0755 deploy/steam-library.py /usr/local/bin/gameswitch-steam-library`) und DayZ einmal neu einrichten.
+
+### Updates von Server und Mods
+
+DayZ prüft mit `forceSameBuild = 1`, dass Server und Spieler dieselbe Version nutzen; Workshop-Mods müssen ebenfalls zum Client passen. Nach einem Spiel- oder Mod-Update:
+
+1. „Steam einrichten“ für das Spiel erneut ausführen. Die Mod-Liste ist mit den Mods aller Profile dieses Spiels vorbelegt; die Bibliothek enthält danach genau diese Mods.
+2. Am Profil „Server & Mods aktualisieren“ wählen. Das Panel zeigt dort an, wenn die Bibliothek neuer ist als das Profil.
+
+Das Update speichert und stoppt ein laufendes Profil, erstellt ein vollständiges `Vor-Update`-Backup, wendet die aktuelle Vorlage erneut an und kopiert Serverdateien, Standard-Missionsdateien, Mods und Signaturschlüssel neu. `mods/` und `keys/` werden dabei vollständig neu aufgebaut. Welt- und Charakterstand (`storage_1`), `profiles/` (Admin-Mod-Daten, Logs) und `serverDZ.cfg` bleiben erhalten. Ein vorher laufendes Profil startet danach wieder. Eigene Änderungen an den Vanilla-Missionsdateien werden wie bei `app_update validate` auf den Spielstand zurückgesetzt.
+
+### DayZ-Administration
+
+- **Ohne Adminmod:** Ein Adminpasswort (8–32 Zeichen) im Profilformular oder später unter „Konsole & Admin“ setzen. Es landet als `passwordAdmin` in `serverDZ.cfg`; im Spiel den Chat öffnen und `#login Adminpasswort` eingeben.
+- **VPPAdminTools (Adminmenü):** Im Profilformular „Adminmenü VPPAdminTools hinzufügen“ wählen (fügt CF `1559212036` und VPPAdminTools `1828439124` in dieser Reihenfolge ein), Adminpasswort und SteamID64 der Admins eintragen und die Mods über „Steam einrichten“ vorbereiten. Bei der Installation entstehen `profiles/VPPAdminTools/Permissions/SuperAdmins/SuperAdmins.txt` und `credentials.txt`; VPP ersetzt das Klartextpasswort beim ersten Start durch seinen Hash. Weitere Superadmins und Passwortänderungen bei gestopptem Profil unter „Konsole & Admin“. Im Spiel öffnet die unter Steuerung → VPPAdminTools hinterlegte Taste das Menü, dort das Adminpasswort eingeben.
+- **Community Online Tools:** wird mit CF davor geladen; Rechte über die eigenen Dateien unter `profiles/PermissionsFramework` pflegen. Ein Panel-Helfer dafür ist nicht enthalten.
+
+Ob die gewählten Mods den Linux-Server offiziell unterstützen, geben ihre Workshop-Seiten nicht an. Vor dem Spielbetrieb einmal mit echten Spielern prüfen.
 
 ## Fehler-ID im Dienstjournal prüfen
 

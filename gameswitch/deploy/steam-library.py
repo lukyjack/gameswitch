@@ -34,6 +34,18 @@ GAMES = {
     "arma3": {"app": "233780", "workshop": "107410", "binary": "arma3server_x64"},
     "dayz": {"app": "223350", "workshop": "221100", "binary": "DayZServer"},
 }
+# Native DayZ links the system libcurl and libcap, which the plain steamcmd
+# image lacks. The runtime image is derived locally from the already present
+# steamcmd image; the reserved .invalid registry name can never be pulled.
+DAYZ_RUNTIME_IMAGE = "gameswitch.invalid/dayz-runtime:1"
+DAYZ_RUNTIME_DOCKERFILE = f"""FROM {IMAGE}
+LABEL org.gameswitch.runtime="dayz"
+RUN apt-get update \\
+ && (apt-get install --yes --no-install-recommends libcurl4t64 || apt-get install --yes --no-install-recommends libcurl4) \\
+ && apt-get install --yes --no-install-recommends libcap2 \\
+ && rm -rf /var/lib/apt/lists/*
+"""
+LIBRARY_NAME = re.compile(r"[A-Za-z0-9._+-]{1,128}")
 CACHE_NAMES = {".steam", ".local", ".cache", "steamapps", "appcache", "depotcache", "userdata", "config", "logs", "package", "dumps", "crashdumps", "steam"}
 MAX_FILES = 500_000
 MAX_BYTES = 250 * 1024 ** 3
@@ -313,6 +325,48 @@ def verify_binary(server, game):
         raise LibraryError("Die benötigte DayZ-Chernarus-Mission fehlt.")
 
 
+def build_runtime_image():
+    """Build the fixed DayZ runtime image without any build context."""
+    try:
+        subprocess.run(["docker", "build", "--quiet", "--tag", DAYZ_RUNTIME_IMAGE, "-"], input=DAYZ_RUNTIME_DOCKERFILE, text=True, capture_output=True, check=True, timeout=1800)
+        image = run_json(["docker", "image", "inspect", DAYZ_RUNTIME_IMAGE])[0].get("Id", "")
+    except (OSError, subprocess.SubprocessError, LibraryError, IndexError, AttributeError):
+        raise LibraryError("Die DayZ-Laufzeitumgebung (libcurl, libcap) konnte nicht gebaut werden. Docker und den Zugang zu den Ubuntu-Paketquellen prüfen; die bisherige Bibliothek bleibt erhalten.") from None
+    if not re.fullmatch(r"sha256:[a-f0-9]{64}", image):
+        raise LibraryError("Die DayZ-Laufzeitumgebung ist nicht eindeutig identifizierbar.")
+    return image
+
+
+def runtime_check_command(image_id, server):
+    if not re.fullmatch(r"sha256:[a-f0-9]{64}", image_id):
+        raise LibraryError("Docker-Abbild der Laufzeitprüfung ist ungültig.")
+    # Only the dynamic loader inspects the binary: no network, no writes, no
+    # capabilities and no Steam data, with the same library path as the game.
+    return ["docker", "run", "--rm", "--pull=never", "--network=none", "--log-driver=none", "--user", f"{UID}:{GID}", "--cap-drop=ALL", "--security-opt=no-new-privileges:true", "--read-only", "--cpus=1", "--memory=256m", "--memory-swap=256m", "--pids-limit=64", "--env", "LD_LIBRARY_PATH=/srv:/srv/linux64", "--mount", f"type=bind,source={server.as_posix()},target=/srv,readonly", "--entrypoint", "/usr/bin/ldd", image_id, "/srv/DayZServer"]
+
+
+def missing_libraries(output):
+    missing = []
+    for line in output.splitlines():
+        if "not found" not in line:
+            continue
+        name = line.strip().split(" ", 1)[0]
+        missing.append(name if LIBRARY_NAME.fullmatch(name) else "unbekannt")
+    return sorted(set(missing))
+
+
+def verify_runtime(server, image_id):
+    try:
+        result = subprocess.run(runtime_check_command(image_id, server), capture_output=True, text=True, timeout=180)
+    except (OSError, subprocess.SubprocessError):
+        raise LibraryError("Die DayZ-Laufzeitprüfung konnte nicht ausgeführt werden.") from None
+    missing = missing_libraries(result.stdout + "\n" + result.stderr)
+    if missing:
+        raise LibraryError("Dem DayZ-Server fehlen Systembibliotheken: " + ", ".join(missing[:10]) + ". Die bisherige Bibliothek bleibt erhalten.")
+    if result.returncode != 0:
+        raise LibraryError("Der DayZ-Server ließ sich in der Laufzeitumgebung nicht prüfen. Die bisherige Bibliothek bleibt erhalten.")
+
+
 def publish(build, game, library_root=LIBRARY_ROOT):
     target = library_root / game
     previous = None
@@ -393,6 +447,11 @@ def prepare(game, mods):
             budget = copy_tree(raw, build / "server", skip_cache=True)
             add_steamclient(build / "server", home)
             verify_binary(build / "server", game)
+            runtime = {}
+            if game == "dayz":
+                print("DayZ-Laufzeitumgebung wird vorbereitet und geprüft …")
+                verify_runtime(build / "server", build_runtime_image())
+                runtime = {"runtimeImage": DAYZ_RUNTIME_IMAGE}
             published_directory(build / "mods")
             for item_id in mods:
                 source = find_workshop(download, home, GAMES[game]["workshop"], item_id)
@@ -402,7 +461,7 @@ def prepare(game, mods):
                 if budget["files"] == before:
                     raise LibraryError("Ein ausgewählter Workshop-Mod ist leer.")
                 collect_keys(destination)
-            manifest = {"schema": 1, "gameId": game, "appId": GAMES[game]["app"], "ready": True, "workshopIds": mods, "updatedAt": dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")}
+            manifest = {"schema": 1, "gameId": game, "appId": GAMES[game]["app"], "ready": True, "workshopIds": mods, **runtime, "updatedAt": dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")}
             with (build / "manifest.json").open("x", encoding="utf8") as handle:
                 json.dump(manifest, handle, indent=2)
                 handle.write("\n")
