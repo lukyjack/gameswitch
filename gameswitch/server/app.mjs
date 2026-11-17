@@ -129,6 +129,28 @@ export async function createApp(options = {}) {
   const steamInputSchema = z.object({ input: z.string().max(512).refine(input => Buffer.byteLength(input) <= 512 && !/[\x00-\x1f\x7f-\x9f\u2028\u2029]/u.test(input), 'Nur eine Eingabe ohne Zeilenumbruch oder Steuerzeichen mit höchstens 512 UTF-8-Bytes ist erlaubt.') }).strict();
   const steamId = req => z.string().uuid().parse(req.params.id);
   app.get('/api/steam/setup/status', asyncRoute(async (req, res) => res.json(await steamSetup.status())));
+  app.get('/api/storage/cleanup', asyncRoute(async (req, res) => {
+    if (controller.busy) return res.status(409).json({ error: 'Eine Serveraktion läuft bereits.' });
+    controller.busy = true;
+    try { res.json(await steamSetup.cleanup({ type: 'cleanup-preview' })); }
+    finally { controller.busy = false; }
+  }));
+  app.post('/api/storage/cleanup', consoleLimit, asyncRoute(async (req, res) => {
+    const input = z.object({
+      kind: z.enum(['cache', 'previous']),
+      id: z.string().regex(/^(?:arma3|dayz)(?:\.previous\.[0-9]{8}T[0-9]{6}Z\.[a-f0-9]{8})?$/),
+      version: z.string().regex(/^[0-9]{1,24}:[0-9]{1,24}:[0-9]{1,24}$/),
+      confirm: z.literal(true),
+    }).strict().parse(req.body);
+    if (!store.healthy || controller.busy) return res.status(409).json({ error: 'Aufräumen gerade nicht möglich. Bitte laufende Aktionen abwarten.' });
+    controller.busy = true;
+    try {
+      const result = await steamSetup.cleanup({ type: 'cleanup-delete', kind: input.kind, id: input.id, version: input.version });
+      store.event('Ein ausgewählter Steam-Download oder älterer Bibliotheksstand wurde entfernt.');
+      await store.save();
+      res.json(result);
+    } finally { controller.busy = false; }
+  }));
   app.post('/api/steam/setup/start', consoleLimit, asyncRoute(async (req, res) => {
     const input = steamStartSchema.parse(req.body);
     if (!store.healthy) return failure(Object.assign(new Error('Persistenzfehler'), { diagnosticReason: 'persistence_failed' }), req, res, 503, 'Persistenzfehler. Die Steam-Einrichtung bleibt gesperrt.');

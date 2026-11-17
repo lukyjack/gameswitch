@@ -126,6 +126,69 @@ class SteamSetupBrokerTests(unittest.TestCase):
         self.assertEqual(stdout.getvalue() + stderr.getvalue(), '')
         self.assertEqual(json.loads(conn.sendall.call_args.args[0]), {'type': 'error', 'reason': 'setup_unavailable'})
 
+    def test_cleanup_allows_only_fixed_helper_and_validated_request(self):
+        requests = [
+            ({'type': 'cleanup-preview'}, True),
+            ({'type': 'cleanup-delete', 'kind': 'cache', 'id': 'dayz', 'version': '1:2:3'}, True),
+            ({'type': 'cleanup-delete', 'kind': 'cache', 'id': '../../etc', 'version': '1:2:3'}, False),
+            ({'type': 'cleanup-delete', 'kind': 'cache', 'id': 'dayz', 'version': '1:2:3', 'command': '/bin/sh'}, False),
+        ]
+        for request, allowed in requests:
+            service = broker.Broker(988)
+            service.connections.acquire()
+            conn = mock.Mock()
+            conn.getsockopt.return_value = struct.pack('3i', 100, 988, 988)
+            conn.recv.return_value = json.dumps(request).encode() + b'\n'
+            result = {'ok': True}
+            with mock.patch.object(broker.socket, 'SO_PEERCRED', 17, create=True), mock.patch.object(broker, 'run_cleanup', return_value=result) as run:
+                service.handle(conn)
+            frame = json.loads(conn.sendall.call_args.args[0])
+            self.assertEqual(frame['type'], 'cleanup-result' if allowed else 'error')
+            self.assertEqual(run.call_count, 1 if allowed else 0)
+            if allowed:
+                self.assertEqual(run.call_args.args[0], request)
+
+    def test_cleanup_timeout_kills_only_its_child_and_cleans_its_marker(self):
+        child = mock.Mock(pid=12345)
+        child.communicate.side_effect = [
+            broker.subprocess.TimeoutExpired('cleanup', 180),
+            broker.subprocess.TimeoutExpired('cleanup', 10),
+            ('', ''),
+        ]
+        with mock.patch.object(broker.subprocess, 'Popen', return_value=child) as popen, \
+             mock.patch.object(broker, 'clear_cleanup_marker') as clear, \
+             mock.patch.object(broker.secrets, 'token_hex', return_value='a' * 32):
+            with self.assertRaises(broker.ProtocolError) as error:
+                broker.run_cleanup({'type': 'cleanup-preview'})
+        self.assertEqual(str(error.exception), 'cleanup_timeout')
+        self.assertEqual(popen.call_args.args[0], ['/usr/bin/python3', '-B', broker.CLEANUP_HELPER])
+        child.terminate.assert_called_once()
+        child.kill.assert_called_once()
+        clear.assert_called_once_with(12345, 'a' * 32)
+
+    @unittest.skipUnless(sys.platform == 'linux' and os.geteuid() == 0, 'root Linux fixture required')
+    def test_only_matching_dead_child_marker_is_removed_under_the_lock(self):
+        with tempfile.TemporaryDirectory() as temp:
+            lock = Path(temp) / 'lock'
+            marker = Path(temp) / 'marker'
+            lock.touch(mode=0o600)
+            marker.write_text('cleanup:12345:' + 'a' * 32 + '\n')
+            with mock.patch.object(broker, 'CLEANUP_LOCK', lock), mock.patch.object(broker, 'CLEANUP_MARKER', marker):
+                broker.clear_cleanup_marker(12345, 'b' * 32)
+                self.assertTrue(marker.exists())
+                with lock.open('r+') as held:
+                    broker.fcntl.flock(held, broker.fcntl.LOCK_EX | broker.fcntl.LOCK_NB)
+                    broker.clear_cleanup_marker(12345, 'a' * 32)
+                    self.assertTrue(marker.exists())
+                broker.clear_cleanup_marker(12345, 'a' * 32)
+                self.assertFalse(marker.exists())
+                marker.write_text('cleanup:12345:' + 'a' * 32 + '\n')
+                temporary = marker.parent / ('.cleanup-12345-' + 'a' * 32)
+                os.link(marker, temporary)
+                broker.clear_cleanup_marker(12345, 'a' * 32)
+                self.assertFalse(marker.exists())
+                self.assertFalse(temporary.exists())
+
     @unittest.skipUnless(sys.platform == 'linux', 'A controlling PTY requires Linux')
     def test_real_pty_is_controlling_echo_disabled_and_child_can_be_cancelled(self):
         with tempfile.TemporaryDirectory(prefix='gameswitch-pty-test-') as temp:

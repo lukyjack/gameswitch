@@ -13,10 +13,12 @@ import os
 from pathlib import Path
 import re
 import selectors
+import secrets
 import signal
 import socket
 import stat
 import struct
+import subprocess
 import sys
 import threading
 import time
@@ -33,6 +35,9 @@ except ImportError:  # Pure protocol tests also run on the Windows workstation.
 
 SOCKET_PATH = Path('/run/gameswitch-steam-setup/control.sock')
 HELPER = '/usr/local/bin/gameswitch-steam-library'
+CLEANUP_HELPER = '/usr/local/lib/gameswitch/storage-cleanup.py'
+CLEANUP_LOCK = Path('/var/lib/gameswitch-steam-private/prepare.lock')
+CLEANUP_MARKER = Path('/var/lib/gameswitch-libraries/.preparing')
 MAX_FRAME = 8192
 MAX_INPUT_BYTES = 512
 MAX_INPUTS = 120
@@ -173,6 +178,76 @@ def send_output(conn, data):
         send_frame(conn, {'type': 'output', 'data': base64.b64encode(data[offset:offset + 4096]).decode('ascii')})
 
 
+def clear_cleanup_marker(pid, token):
+    """Remove only this dead cleanup child's marker, while holding its lock."""
+    if fcntl is None or not isinstance(pid, int) or pid <= 1 or not re.fullmatch(r'[a-f0-9]{32}', token):
+        return
+    try:
+        lock_fd = os.open(CLEANUP_LOCK, os.O_RDWR | os.O_NOFOLLOW)
+        with os.fdopen(lock_fd, 'r+') as lock:
+            info = os.fstat(lock.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_nlink != 1 or info.st_mode & 0o077:
+                return
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return
+            fd = os.open(CLEANUP_MARKER, os.O_RDONLY | os.O_NOFOLLOW)
+            with os.fdopen(fd, 'rb') as handle:
+                before = os.fstat(handle.fileno())
+                if not stat.S_ISREG(before.st_mode) or before.st_uid != 0 or before.st_nlink not in (1, 2):
+                    return
+                if handle.read(128) != f'cleanup:{pid}:{token}\n'.encode('ascii'):
+                    return
+                temporary = CLEANUP_MARKER.parent / f'.cleanup-{pid}-{token}'
+                try:
+                    temp_stat = temporary.lstat()
+                except FileNotFoundError:
+                    temp_stat = None
+                same_temp = temp_stat is not None and (temp_stat.st_dev, temp_stat.st_ino) == (before.st_dev, before.st_ino)
+                if before.st_nlink == 2 and not same_temp:
+                    return
+                after = CLEANUP_MARKER.lstat()
+                if (before.st_dev, before.st_ino) == (after.st_dev, after.st_ino):
+                    CLEANUP_MARKER.unlink()
+                    if same_temp:
+                        current_temp = temporary.lstat()
+                        if (current_temp.st_dev, current_temp.st_ino) == (before.st_dev, before.st_ino):
+                            temporary.unlink()
+    except OSError:
+        return
+
+
+def run_cleanup(request):
+    token = secrets.token_hex(16)
+    child = subprocess.Popen(['/usr/bin/python3', '-B', CLEANUP_HELPER],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, env=TRUSTED_ENV)
+    try:
+        stdout, _stderr = child.communicate(input=json.dumps({'request': request, 'markerToken': token}) + '\n', timeout=180)
+    except subprocess.TimeoutExpired:
+        child.terminate()
+        try:
+            child.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            child.kill()
+            child.communicate()
+        # communicate() confirms the child has exited. Lock and token checks
+        # prevent touching a concurrent or unrelated Steam setup marker.
+        clear_cleanup_marker(child.pid, token)
+        raise ProtocolError('cleanup_timeout') from None
+    if child.returncode:
+        clear_cleanup_marker(child.pid, token)
+    if len(stdout) > MAX_FRAME:
+        raise ProtocolError('cleanup_unavailable')
+    payload = json.loads(stdout)
+    if isinstance(payload, dict) and payload.get('reason') == 'busy':
+        raise ProtocolError('busy')
+    if child.returncode or not isinstance(payload, dict) or payload.get('ok') is not True:
+        raise ProtocolError('cleanup_unavailable')
+    return payload
+
+
 def spawn_helper(args):
     if pty is None:
         raise ProtocolError('unsupported_host')
@@ -264,6 +339,27 @@ class Broker:
                 initial = frames.feed(chunk)
             if len(initial) != 1:
                 raise ProtocolError('invalid_start')
+            request = initial[0]
+            if request.get('type') in {'cleanup-preview', 'cleanup-delete'}:
+                if request.get('type') == 'cleanup-preview':
+                    if request != {'type': 'cleanup-preview'}:
+                        raise ProtocolError('invalid_request')
+                elif (set(request) != {'type', 'kind', 'id', 'version'}
+                      or request.get('kind') not in {'cache', 'previous'}
+                      or not isinstance(request.get('id'), str)
+                      or not re.fullmatch(r'(?:arma3|dayz)(?:\.previous\.[0-9]{8}T[0-9]{6}Z\.[a-f0-9]{8})?', request['id'])
+                      or not isinstance(request.get('version'), str)
+                      or not re.fullmatch(r'[0-9]{1,24}:[0-9]{1,24}:[0-9]{1,24}', request['version'])):
+                    raise ProtocolError('invalid_request')
+                locked = self.active.acquire(blocking=False)
+                if not locked:
+                    raise ProtocolError('busy')
+                try:
+                    payload = run_cleanup(request)
+                    send_frame(conn, {'type': 'cleanup-result', 'result': payload})
+                    return
+                except (OSError, subprocess.SubprocessError, ValueError):
+                    raise ProtocolError('cleanup_unavailable') from None
             game, mods = start_request(initial[0])
             locked = self.active.acquire(blocking=False)
             if not locked:

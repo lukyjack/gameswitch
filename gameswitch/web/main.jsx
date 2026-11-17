@@ -2340,6 +2340,31 @@ function Backups({ state, busy, onRestore, onNew }) {
 }
 
 function Security({ state, sandbox, onSteamSetup }) {
+  const [cleanupItems, setCleanupItems] = useState(null);
+  const [cleanupDisk, setCleanupDisk] = useState(null);
+  const [cleanupError, setCleanupError] = useState('');
+  const [cleanupPending, setCleanupPending] = useState(false);
+  const [cleanupChoice, setCleanupChoice] = useState(null);
+  async function inspectStorage() {
+    setCleanupPending(true); setCleanupError('');
+    try { const result = await api('/storage/cleanup'); setCleanupItems(result.items || []); setCleanupDisk(result.disk || null); }
+    catch (error) { setCleanupError(error.message); }
+    finally { setCleanupPending(false); }
+  }
+  async function removeStorage() {
+    if (!cleanupChoice || cleanupPending) return;
+    setCleanupPending(true); setCleanupError('');
+    try {
+      await api('/storage/cleanup', { method: 'POST', body: { ...cleanupChoice, confirm: true } });
+      setCleanupChoice(null);
+      const result = await api('/storage/cleanup');
+      setCleanupItems(result.items || []);
+      setCleanupDisk(result.disk || null);
+    } catch (error) {
+      setCleanupChoice(null);
+      setCleanupError(error.message + ' Bitte die Übersicht erneut prüfen, bevor du es wiederholst.');
+    } finally { setCleanupPending(false); }
+  }
   const protections = [
     [
       "Geschützter Zugriff",
@@ -2425,6 +2450,25 @@ function Security({ state, sandbox, onSteamSetup }) {
           <h3>Steam für deine Spiele</h3>
           <p>Arma 3 und DayZ vorbereiten und die Steam-Anmeldung bei Bedarf direkt hier durchführen.</p>
           <button className="button primary-soft" onClick={onSteamSetup}><Gamepad2 size={16} />Steam einrichten</button>
+        </div>
+        <div className="steam-security-connect">
+          <h3>Speicher aufräumen</h3>
+          <p>Alte Steam-Downloads und frühere Bibliotheksstände prüfen. Spielstände, Backups und Steam-Anmeldung bleiben erhalten.</p>
+          <button className="button primary-soft" onClick={inspectStorage} disabled={cleanupPending || sandbox}><HardDrive size={16} />{cleanupPending ? 'Wird geprüft …' : 'Speicher prüfen'}</button>
+          {cleanupDisk && <p>{(cleanupDisk.free / 1024 ** 3).toFixed(1)} GiB frei von {(cleanupDisk.total / 1024 ** 3).toFixed(1)} GiB.</p>}
+          {cleanupError && <p role="alert">{cleanupError}</p>}
+          {cleanupItems && !cleanupItems.length && <p>Keine aufräumbaren Steam-Dateien gefunden.</p>}
+          {cleanupItems?.map(item => (
+            <div className="connection-fact" key={item.kind + item.id}>
+              <span>{item.kind === 'cache' ? `Download-Cache: ${gameName(item.id)}` : `Alter Bibliotheksstand: ${item.id}`} · {(item.bytes / 1024 ** 3).toFixed(2)} GiB</span>
+              <button className="text-button" disabled={cleanupPending} onClick={() => setCleanupChoice({ kind: item.kind, id: item.id, version: item.version })}>Entfernen</button>
+            </div>
+          ))}
+          {cleanupChoice && <div role="alert">
+            <p>{cleanupChoice.kind === 'cache' ? 'Diesen Download-Cache dauerhaft entfernen? Bei einer späteren Steam-Einrichtung muss er erneut heruntergeladen werden.' : 'Diesen älteren Bibliotheksstand dauerhaft entfernen? Ein Rückgriff auf genau diesen alten Stand ist danach nicht mehr möglich.'}</p>
+            <button className="button danger-outline" disabled={cleanupPending} onClick={removeStorage}>Ja, ausgewählte Dateien entfernen</button>
+            <button className="button subtle" disabled={cleanupPending} onClick={() => setCleanupChoice(null)}>Abbrechen</button>
+          </div>}
         </div>
         <div className="system-note">
           <TriangleAlert size={16} />

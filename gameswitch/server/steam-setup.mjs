@@ -21,6 +21,35 @@ export class SteamSetup {
     const session = this.session;
     return { enabled, active: Boolean(session && activeStates.has(session.state)), ...(session ? { session: publicSession(session) } : {}), ...(!enabled ? { reason: 'Die Steam-Einrichtung muss auf dem VPS aktiviert sein.' } : {}) };
   }
+  async cleanup(request) {
+    if (this.closed || !(await this.status()).enabled) throw unavailable();
+    if (this.session && activeStates.has(this.session.state)) throw failure('Eine Steam-Einrichtung läuft bereits.', 409);
+    return await new Promise((resolve, reject) => {
+      const socket = net.createConnection(this.socketPath);
+      let buffer = '', settled = false;
+      const finish = (error, result) => {
+        if (settled) return;
+        settled = true; clearTimeout(timer); socket.destroy();
+        error ? reject(error) : resolve(result);
+      };
+      const timer = setTimeout(() => finish(failure('Aufräumen nicht bestätigt. Bitte Status prüfen, bevor du erneut aufräumst.', 502)), 300000);
+      timer.unref();
+      socket.once('connect', () => socket.write(JSON.stringify(request) + '\n'));
+      socket.on('data', chunk => {
+        buffer += chunk.toString('utf8');
+        if (Buffer.byteLength(buffer) > 8192) return finish(unavailable());
+        if (!buffer.includes('\n')) return;
+        try {
+          const frame = JSON.parse(buffer.slice(0, buffer.indexOf('\n')));
+          if (frame.type === 'error') return finish(frame.reason === 'busy' ? failure('Eine Steam-Einrichtung oder vorbereitete Spielbibliothek wird gerade verwendet. Bitte zuerst deren Abschluss abwarten.', 409) : frame.reason === 'cleanup_timeout' ? failure('Das Aufräumen wurde unterbrochen. Bitte den Speicher erneut prüfen.', 504) : unavailable());
+          if (frame.type !== 'cleanup-result' || !frame.result || frame.result.ok !== true) return finish(unavailable());
+          finish(null, frame.result);
+        } catch { finish(unavailable()); }
+      });
+      socket.once('error', () => finish(unavailable()));
+      socket.once('close', () => finish(unavailable()));
+    });
+  }
   get(id) {
     if (!this.session || this.session.id !== id) throw failure('Steam-Einrichtung nicht gefunden.', 404);
     return this.session;

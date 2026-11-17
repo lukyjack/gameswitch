@@ -83,6 +83,25 @@ test('Steam IPC handshake, private input and cancel each use one fixed frame wit
   assert.equal(f.frames.length, before);
 });
 
+test('storage cleanup uses a bounded fixed broker request and returns its preview', async t => {
+  const f = await fixture(t, (frame, socket, send) => {
+    if (frame.type === 'cleanup-preview') send(socket, { type: 'cleanup-result', result: { ok: true, items: [{ kind: 'cache', id: 'dayz', version: '1:2:3', bytes: 42 }], disk: { total: 100, free: 50 } } });
+    if (frame.type === 'cleanup-delete') send(socket, { type: 'cleanup-result', result: { ok: true, deleted: true } });
+  });
+  const preview = await f.manager.cleanup({ type: 'cleanup-preview' });
+  assert.equal(preview.items[0].id, 'dayz');
+  const request = { type: 'cleanup-delete', kind: 'cache', id: 'dayz', version: '1:2:3' };
+  assert.equal((await f.manager.cleanup(request)).deleted, true);
+  assert.deepEqual(f.frames, [{ type: 'cleanup-preview' }, request]);
+});
+
+test('active Steam preparation blocks cleanup without contacting the broker again', async t => {
+  const f = await fixture(t);
+  await f.manager.start({ gameId: 'dayz', workshopIds: [] });
+  await assert.rejects(f.manager.cleanup({ type: 'cleanup-preview' }), error => error.status === 409);
+  assert.deepEqual(f.frames, [{ type: 'start', gameId: 'dayz', workshopIds: [] }]);
+});
+
 test('malformed or private broker failure frames fail closed without raw errors or process crashes', async t => {
   for (const raw of ['null\n', '[]\n', JSON.stringify({ type: 'error', reason: privateFixture }) + '\n', 'x'.repeat(8193) + '\n']) {
     await t.test(raw.startsWith('x') ? 'oversized frame' : raw.startsWith('{') ? 'unknown private reason' : raw.trim(), async st => {

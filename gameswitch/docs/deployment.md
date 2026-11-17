@@ -69,6 +69,7 @@ sudo install -d -o root -g root -m 0755 /usr/local/lib/gameswitch /var/lib/games
 sudo install -d -o root -g root -m 0700 /var/lib/gameswitch-steam-private
 sudo install -o root -g root -m 0755 deploy/steam-library.py /usr/local/bin/gameswitch-steam-library
 sudo install -o root -g root -m 0644 deploy/steam-setup-broker.py /usr/local/lib/gameswitch/steam-setup-broker.py
+sudo install -o root -g root -m 0644 deploy/storage-cleanup.py /usr/local/lib/gameswitch/storage-cleanup.py
 sudo install -o root -g root -m 0644 deploy/gameswitch-steam-setup.service /etc/systemd/system/gameswitch-steam-setup.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now gameswitch-steam-setup.service
@@ -76,6 +77,8 @@ sudo systemctl is-active gameswitch-steam-setup.service
 ```
 
 Diese Befehle sind aus `/opt/gameswitch/gameswitch` gedacht. Der neue Dienst verwaltet sein Runtime-Verzeichnis und den Socket `/run/gameswitch-steam-setup/control.sock`: `root:gameswitch`, Socket `0660`, Verzeichnis `0750`. Linux-Peercredentials erlauben nur Root oder die UID des vorhandenen Appbenutzers (auf dem Zielhost 988). Das Beispielservice begrenzt Schreibpfade und Fähigkeiten; seine festgelegten Bibliotheks-/Privatverzeichnisse müssen vor dem Start existieren. Der Bibliothekshelfer verwendet nur das kontrollierte lokale offizielle SteamCMD-Image, begrenzte Ressourcen und einen eigenen Downloadcontainer. Kein Docker-Socket wird dem Appprozess oder Spielecontainern gegeben.
+
+Unter „Sicherheit & System“ zeigt „Speicher prüfen“ den freien Speicher sowie gesondert frühere veröffentlichte Steam-Bibliotheken und die Download-Zwischenstände für Arma 3 und DayZ. Eine Auswahl wird erst nach ausdrücklicher Bestätigung entfernt. Welten, Spielprofile, PufferPanel-Backups und der Steam-Anmeldecache `steam-home` werden nicht gelöscht. Ältere Bibliotheken sind Rückfallkopien; nach ihrer Entfernung ist genau dieser alte Stand nicht mehr verfügbar. Download-Zwischenstände müssen bei späterer Einrichtung erneut geladen werden. Der root-eigene Broker akzeptiert keine freien Pfade oder Befehle und die Aufräumaktion verwendet dieselbe Sperre wie die Steam-Einrichtung. Während einer aktiven Steam-Einrichtung oder der Verwendung einer vorbereiteten Bibliothek bleibt Aufräumen gesperrt.
 
 Für die aktualisierte Anwendung gegebenenfalls ausschließlich `gameswitch` nach Abschluss laufender Panelaktionen neu starten. **PufferPanel nicht neu starten:** dessen geordneter Dienststopp beendet verwaltete Spiele. Der neue Steam-Einrichtungsdienst erfordert keinen PufferPanel- oder Minecraft-Neustart. Ein Appneustart meldet Browser ab und bricht eine noch laufende Steam-Einrichtung ab; bereits veröffentlichte Bibliotheken bleiben erhalten.
 

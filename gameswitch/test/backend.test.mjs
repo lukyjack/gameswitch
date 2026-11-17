@@ -34,6 +34,28 @@ async function fixture(t, extra = {}) {
 
 const profile = (name = 'Minecraft Freunde') => ({ name, gameId: 'minecraft', version: '1.21.4', loader: 'paper', maxPlayers: 12, memoryMb: 6144, port: 25565, eulaAccepted: true });
 
+test('storage cleanup requires authentication, explicit confirmation and fixed identifiers', async t => {
+  const calls = [];
+  const steamSetup = {
+    status: async () => ({ enabled: true, active: false }),
+    cleanup: async request => { calls.push(request); return request.type === 'cleanup-preview' ? { ok: true, items: [] } : { ok: true, deleted: true }; },
+    close: async () => {},
+  };
+  const f = await fixture(t, { steamSetup });
+  for (const action of ['save', 'stop', 'start', 'backup', 'install', 'restore']) {
+    f.instance.runtime[action] = async () => { throw new Error('Cleanup must not change any game lifecycle'); };
+  }
+  assert.equal((await f.request('/api/storage/cleanup')).status, 401);
+  await f.setup();
+  assert.equal((await f.request('/api/storage/cleanup')).status, 200);
+  const item = { kind: 'cache', id: 'dayz', version: '1:2:3' };
+  assert.equal((await f.request('/api/storage/cleanup', 'POST', item)).status, 400);
+  assert.equal((await f.request('/api/storage/cleanup', 'POST', { ...item, id: '../../etc', confirm: true })).status, 400);
+  assert.equal((await f.request('/api/storage/cleanup', 'POST', { ...item, confirm: true }, { 'X-CSRF-Token': '' })).status, 403);
+  assert.equal((await f.request('/api/storage/cleanup', 'POST', { ...item, confirm: true })).status, 200);
+  assert.deepEqual(calls, [{ type: 'cleanup-preview' }, { type: 'cleanup-delete', ...item }]);
+});
+
 test('bootstrap authentication, cookie flags, cross-origin/CSRF and secret isolation', async t => {
   const f = await fixture(t);
   assert.equal((await f.request('/api/state')).status, 401);
