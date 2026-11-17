@@ -196,7 +196,7 @@ test('background lifecycle errors expose only a safe correlated job error and au
   assert.equal(f.records.length, 1);
   assert.equal(f.records[0].errorId, requestId);
   assert.equal(f.records[0].profileId, profile.id);
-  assert.equal(f.records[0].operation, 'activate');
+  assert.equal(f.records[0].operation, 'parallel');
 });
 
 test('diagnostic sink failure cannot replace a safe correlated HTTP response', async t => {

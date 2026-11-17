@@ -35,7 +35,6 @@ type Docker struct {
 	Labels        map[string]string    `json:"labels,omitempty"`
 	Config        container.Config     `json:"config,omitempty"`
 
-	connection          client.HijackedResponse
 	statLocker          sync.Mutex
 	lastStats           *pufferpanel.ServerStats
 	lastStatTime        time.Time
@@ -54,9 +53,7 @@ func CreateDockerEnvironment() pufferpanel.EnvironmentImpl {
 }
 
 func (d *Docker) ExecuteAsyncImpl(environment *pufferpanel.Environment, steps pufferpanel.ExecutionData) error {
-	var err error
-	var dockerClient *client.Client
-	dockerClient, err = pufferpanel.GetDockerClient()
+	dockerClient, err := pufferpanel.GetDockerClient()
 	if err != nil {
 		return err
 	}
@@ -72,13 +69,26 @@ func (d *Docker) ExecuteAsyncImpl(environment *pufferpanel.Environment, steps pu
 		return errors.New("docker container already exists")
 	}
 
-	err = d.createContainer(environment, steps, ctx)
+	containerID, err := d.createContainer(environment, steps, ctx)
 	if err != nil {
 		return err
 	}
+	return d.startContainer(ctx, dockerClient, containerID, environment, steps)
+}
 
-	d.disableSpecialStats = steps.DisableStats
-	//d.disableStdin = steps.DisableStdin
+func (d *Docker) startContainer(ctx context.Context, dockerClient *client.Client, containerID string, environment *pufferpanel.Environment, steps pufferpanel.ExecutionData) (err error) {
+	defer func() {
+		if err == nil {
+			return
+		}
+		// A failed attach/start can leave a created container that blocks retries.
+		// Remove only this attempt's container, without killing it or removing volumes.
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		if _, cleanupErr := dockerClient.ContainerRemove(cleanupCtx, containerID, client.ContainerRemoveOptions{}); cleanupErr != nil {
+			environment.Log(logging.Error, "Failed to remove container after failed start: %s", cleanupErr)
+		}
+	}()
 
 	cfg := client.ContainerAttachOptions{
 		Stdin:  true,
@@ -87,25 +97,23 @@ func (d *Docker) ExecuteAsyncImpl(environment *pufferpanel.Environment, steps pu
 		Stream: true,
 	}
 
-	res, err := dockerClient.ContainerAttach(ctx, environment.Server.Id(), cfg)
+	res, err := dockerClient.ContainerAttach(ctx, containerID, cfg)
 	if err != nil {
 		return err
 	}
-	d.connection = res.HijackedResponse
-
 	go func() {
-		defer d.connection.Close()
-		_, _ = io.Copy(environment.Wrapper, d.connection.Reader)
+		defer res.Close()
+		_, _ = io.Copy(environment.Wrapper, res.Reader)
 	}()
 
-	//if !d.disableStdin {
-	//	environment.CreateConsoleStdinProxy(steps.StdInConfig, d.connection.Conn)
-	//}
-	environment.CreateConsoleStdinProxy(steps.StdInConfig, d.connection.Conn)
-
+	environment.DisplayToConsole(true, "Starting container\n")
+	if _, err = dockerClient.ContainerStart(ctx, containerID, client.ContainerStartOptions{}); err != nil {
+		res.Close()
+		return err
+	}
+	d.disableSpecialStats = steps.DisableStats
+	environment.CreateConsoleStdinProxy(steps.StdInConfig, res.Conn)
 	environment.Console.Start()
-
-	startOpts := client.ContainerStartOptions{}
 
 	_ = environment.StatusTracker.WriteMessage(pufferpanel.Transmission{
 		Message: pufferpanel.ServerRunning{
@@ -115,14 +123,8 @@ func (d *Docker) ExecuteAsyncImpl(environment *pufferpanel.Environment, steps pu
 		Type: pufferpanel.MessageTypeStatus,
 	})
 
-	environment.DisplayToConsole(true, "Starting container\n")
-	_, err = dockerClient.ContainerStart(ctx, environment.Server.Id(), startOpts)
-	if err != nil {
-		return err
-	}
-
-	go d.handleClose(environment, dockerClient, steps.Callback)
-	return err
+	go d.handleClose(environment, dockerClient, containerID, steps.Callback)
+	return nil
 }
 
 func (d *Docker) KillImpl(environment *pufferpanel.Environment) error {
@@ -268,7 +270,7 @@ func (d *Docker) GetStatsImpl(environment *pufferpanel.Environment) (*pufferpane
 	return stats, nil
 }
 
-func (d *Docker) createContainer(environment *pufferpanel.Environment, data pufferpanel.ExecutionData, ctx context.Context) error {
+func (d *Docker) createContainer(environment *pufferpanel.Environment, data pufferpanel.ExecutionData, ctx context.Context) (string, error) {
 	environment.Log(logging.Debug, "Creating container")
 	containerRoot := d.ContainerRoot
 	if containerRoot == "" {
@@ -277,7 +279,7 @@ func (d *Docker) createContainer(environment *pufferpanel.Environment, data puff
 
 	if runtime.GOOS != "windows" {
 		if !filepath.IsAbs(containerRoot) {
-			return pufferpanel.ErrPathNotAbs(containerRoot)
+			return "", pufferpanel.ErrPathNotAbs(containerRoot)
 		}
 	}
 
@@ -286,7 +288,7 @@ func (d *Docker) createContainer(environment *pufferpanel.Environment, data puff
 	err := pufferpanel.PullDockerImage(environment, ctx, imageName, false)
 
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	cmd, args := utils.SplitArguments(data.Command)
@@ -374,7 +376,7 @@ func (d *Docker) createContainer(environment *pufferpanel.Environment, data puff
 	if !filepath.IsAbs(dir) {
 		dir, err = filepath.Abs(dir)
 		if err != nil {
-			return err
+			return "", err
 		}
 	}
 
@@ -425,7 +427,7 @@ func (d *Docker) createContainer(environment *pufferpanel.Environment, data puff
 	for _, v := range portBinds {
 		m, err := utils.ParsePortMap(v)
 		if err != nil {
-			return err
+			return "", err
 		}
 		for k, z := range m {
 			if i, ok := hostConfig.PortBindings[k]; ok {
@@ -449,16 +451,16 @@ func (d *Docker) createContainer(environment *pufferpanel.Environment, data puff
 	//for now, default to linux across the board. This resolves problems that Windows has when you use it and docker
 	cl, err := pufferpanel.GetDockerClient()
 	if err != nil {
-		return err
+		return "", err
 	}
-	_, err = cl.ContainerCreate(ctx, client.ContainerCreateOptions{
+	created, err := cl.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Config:           containerConfig,
 		HostConfig:       hostConfig,
 		NetworkingConfig: networkConfig,
 		Platform:         &v1.Platform{OS: "linux"},
 		Name:             environment.Server.Id(),
 	})
-	return err
+	return created.ID, err
 }
 
 func (d *Docker) SendCodeImpl(environment *pufferpanel.Environment, code int) error {
@@ -497,9 +499,9 @@ func (d *Docker) GetGidImpl(environment *pufferpanel.Environment) int {
 	return cast.ToInt(strings.Split(user, ":")[1])
 }
 
-func (d *Docker) handleClose(environment *pufferpanel.Environment, dc *client.Client, callback func(int)) {
+func (d *Docker) handleClose(environment *pufferpanel.Environment, dc *client.Client, containerID string, callback func(int)) {
 	exitCode := -1
-	res := dc.ContainerWait(context.Background(), environment.Server.Id(), client.ContainerWaitOptions{
+	res := dc.ContainerWait(context.Background(), containerID, client.ContainerWaitOptions{
 		Condition: container.WaitConditionRemoved,
 	})
 

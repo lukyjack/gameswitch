@@ -1,6 +1,6 @@
 # GameSwitch
 
-Eine deutschsprachige Gameserver-Oberfläche für einen einzelnen VPS: Spiele und Minecraft-Modpacks als getrennte Profile verwalten und zwischen ihnen wechseln, ohne den bisherigen Spielstand zu überschreiben.
+Eine deutschsprachige Gameserver-Oberfläche für einen einzelnen VPS. Jedes Spiel und Minecraft-Modpack erhält ein eigenes Profil mit eigenem Spielstand. Profile lassen sich parallel betreiben oder gezielt wechseln.
 
 **Entwicklungsstand:** Auf Debian 13 mit Docker und HTTPS eingerichtet, einschließlich der Erweiterung um Valheim, Terraria 1.4.5.8 und Factorio 2.1.24. Diese drei Spiele wurden mit isolierten echten Instanzen geprüft. FTB Evolution 2 wurde mit verbundenen Spielern geprüft; Garry's Mod lädt die konfigurierte Collection einschließlich ULX. Squad bleibt nach einem fehlgeschlagenen nativen Starttest gesperrt; Farming Simulator 25 benötigt eine Windows-/Lizenzanbindung. Der konkrete Prüfumfang steht in [validation.md](gameswitch/docs/validation.md).
 
@@ -32,14 +32,14 @@ Der gebaute Server läuft standardmäßig unter `http://127.0.0.1:3001`. Konfigu
 - Garry's Mod mit Sandbox oder Trouble in Terrorist Town, Steam-Workshop-Collection, Map und ULX-Hilfe für Admin, Superadmin oder Entfernen der direkten Zuweisung per Steam-ID.
 - Valheim mit eigener Welt, getrennt gespeichertem Serverpasswort und Steam-Administratorliste; die Listenpflege benötigt eine gestoppte Instanz. Terraria 1.4.5.8 und Factorio 2.1.24 erhalten ebenfalls eigene Welten. Factorio startet mit Basisspiel, privatem IP-Beitritt, Serverpasswort und aktiver Kontoprüfung.
 - Arma 3 mit fünf festen Koop-/Zeus-Missionen, einzelnen Workshop-Mod-IDs, privatem Spielpasswort und Steam-Administratorliste. DayZ ist zunächst auf Chernarus beschränkt, mit Workshop-Mod-IDs und eigenem persistentem Welt-/Charakterstand. DayZ-Administration: Adminpasswort für `#login`; mit einem Klick ergänzbares Adminmenü VPPAdminTools (inklusive CF) mit Superadmin-Pflege per SteamID64. CF-Abhängigkeiten von VPP/COT werden geprüft. DayZ läuft in einem lokal gebauten Laufzeitimage mit den benötigten Systembibliotheken.
-- Ein aktives von GameSwitch verwaltetes Profil. Wechsel: laufende Instanz geordnet beenden → vollständiges Backup bestätigen → Ziel installieren/starten. Getrennte Serververzeichnisse bewahren die ursprünglichen Welten und Konfigurationen. Zusätzliche manuell gestartete Server außerhalb der verwalteten Profile liegen außerhalb dieser Steuerung.
+- Mehrere Profile können gleichzeitig laufen, wenn ihre Host-Ports frei sind und ihre RAM-Limits zusammen ins Spielserverbudget passen. Start, Stopp und Neustart beziehen sich jeweils auf das ausgewählte Profil. Ein gezielter Wechsel ist möglich, wenn genau das angegebene Quellprofil läuft. GameSwitch stoppt und sichert die Quelle vor dem Start des Ziels.
 - Backup-Liste, Wiederherstellung im gestoppten Zustand mit vorheriger Sicherung, Konsole, Vorgangsfortschritt und Ereignisse.
 - Befehleingabe für Minecraft, Garry's Mod, Terraria und Factorio; Minecraft mit OP-Hilfe. Valheim und Arma 3 zeigen die Ausgabe und verwalten Admins über eine Datei bei bestätigtem Stopp. Arma-Admins melden sich danach im Spiel mit `#login` an. DayZ bietet hier lesbare Serverlogs. Befehle benötigen eine angemeldete Administratorsitzung und werden an die Spielschnittstelle gesendet.
-- Neustart des aktiven Profils mit ausdrücklicher Bestätigung: Welt speichern, geordnet stoppen, vollständiges Backup abschließen und dasselbe Profil ohne Neuinstallation starten.
+- Beim Stopp speichert und beendet GameSwitch das ausgewählte Profil geordnet und schließt dessen Sicherheitsbackup ab. Ein bestätigter Neustart startet anschließend dasselbe Profil ohne Neuinstallation.
 - „Server & Mods aktualisieren“ für Arma 3 und DayZ: übernimmt eine neu vorbereitete Steam-Bibliothek (Spiel- und Mod-Updates) mit Backup vorher; Welt, Profile und Serverkonfiguration bleiben, Mods und Schlüssel werden neu aufgebaut. Das Panel zeigt an, wenn die Bibliothek neuer ist als das Profil.
 - Geschützte Steam-Einrichtung direkt im Panel: Über „Steam einrichten“ Arma 3 oder DayZ und einzelne Workshop-IDs wählen, SteamCMD-Anmeldung bei Bedarf öffnen und Accountname, Passwort beziehungsweise Steam Guard verdeckt eingeben. Die Anmeldung kann später erfolgen; ohne vorbereitete Bibliothek bleibt der Profilstart gesperrt.
 - Persistente Profile und Jobs; widersprüchliche oder unterbrochene Abläufe brechen kontrolliert ab.
-- Ressourcenbudget passend für 8 vCPU / 16 GB RAM, mit Reserve für Betriebssystem und Panel. Große Modpacks müssen anhand ihrer eigenen Anforderungen dimensioniert werden.
+- Standardbudget für 8 vCPU und 16 GiB RAM. Bei 3 GiB Systemreserve bleiben insgesamt 13 GiB für laufende Profile. Maßgeblich sind die konfigurierten RAM-Limits, unabhängig von der momentanen Auslastung.
 
 Weitere Spiele werden als geprüfte serverseitige Definitionen hinzugefügt. Beliebige Shellbefehle, Container-Images und Installations-URLs können über die Oberfläche nicht eingeschleust werden. Siehe [Erweiterungen](gameswitch/docs/extending.md).
 
@@ -53,7 +53,7 @@ Arma 3 und DayZ verwenden eine geschützte, schreibgeschützt eingebundene Serve
 
 Fehlgeschlagene Serveraktionen erhalten eine Fehler-ID zur Zuordnung im privaten Dienstjournal. Die Diagnose speichert nur freigegebene Metadaten und feste Fehlerkategorien; Anfrageinhalte, Passwörter und rohe Laufzeitantworten werden nicht übernommen. Details zum administrativen Zugriff stehen in [deployment.md](gameswitch/docs/deployment.md).
 
-Die echte Laufzeit verwendet **diesen gepatchten PufferPanel-Fork**. Die Backup-Erweiterung meldet tatsächlichen Abschluss beziehungsweise Fehler; ein unverändertes PufferPanel wird dafür abgelehnt. Das ist eine Voraussetzung für den sicheren Wechselablauf.
+Die echte Laufzeit verwendet **diesen gepatchten PufferPanel-Fork**. Die Backup-Erweiterung meldet den bestätigten Abschluss oder einen Fehler bei Stopp, Neustart und Wechsel.
 
 Details: [Sicherheitsmodell](gameswitch/docs/security.md), [Hosting-Vorbereitung](gameswitch/docs/deployment.md), [API](gameswitch/docs/api-contract.md).
 

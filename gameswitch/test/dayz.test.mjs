@@ -1,12 +1,40 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildDayzDefinition, dayzSettings, dayzServerConfig, DAYZ_APP_ID, DAYZ_WORKSHOP_APP_ID, DAYZ_DEFAULT_MISSION } from '../server/dayz.mjs';
+import { PufferRuntime } from '../server/runtime.mjs';
 
 const profile = patch => ({ gameId: 'dayz', loader: 'steam', version: 'latest', name: 'Freunde Überleben', port: 2302, queryPort: 27016, maxPlayers: 20, memoryMb: 8192, ...patch });
 const secrets = { serverPassword: 'Fixture_Only_DayZ_Password' };
-const environment = () => ({ type: 'docker', image: 'steamcmd/steamcmd:latest', config: { User: '1000:1000' }, hostConfig: { CapDrop: ['ALL'], Privileged: false, SecurityOpt: ['no-new-privileges:true'], Memory: 8192 * 1024 * 1024, NanoCpus: 6_000_000_000, Binds: [] }, portBindings: ['0.0.0.0:2302:2302/udp', '0.0.0.0:2303:2303/udp', '0.0.0.0:27016:27016/udp'] });
+const environment = () => ({ type: 'docker', image: 'steamcmd/steamcmd:latest', config: { User: '1000:1000' }, hostConfig: { CapDrop: ['ALL'], Privileged: false, SecurityOpt: ['no-new-privileges:true'], Memory: 8192 * 1024 * 1024, NanoCpus: 6_000_000_000, Binds: [] }, portBindings: ['0.0.0.0:2302:2302/udp', '0.0.0.0:2303:2303/udp', '0.0.0.0:2304:2304/udp', '0.0.0.0:27016:27016/udp'] });
 const definition = (patch = {}, env = environment()) => buildDayzDefinition(profile(patch), { nodeId: 0, gameUid: 1000, gameGid: 1000, profileSecrets: secrets }, 'GameSwitch-fixture', env);
 const launch = value => value.install.find(step => step.target === 'dayz-launch.sh').text;
+
+test('DayZ repairs legacy bindings on the next stopped start and leaves current definitions alone', async () => {
+  const runtime = new PufferRuntime({});
+  let running = false; const calls = [];
+  const old = { environment: environment(), run: { command: 'existing DayZ launch command' } };
+  old.environment.portBindings.splice(2, 1);
+  runtime.status = async () => ({ running });
+  runtime.request = async (path, options = {}) => {
+    calls.push({ path, method: options.method, body: options.body });
+    if (path.endsWith('/definition') && !options.method) return old;
+    if (path.includes('/start?')) running = true;
+  };
+  const game = profile({ id: 'test', serverId: '0123456789abcdef' });
+  await runtime.start(game);
+  const update = calls.find(c => c.method === 'PUT');
+  assert.deepEqual(update.body.environment, environment());
+  assert.deepEqual(update.body.run, { command: 'existing DayZ launch command' });
+  assert.ok(calls.indexOf(update) < calls.findIndex(c => c.path.includes('/start?')));
+  calls.length = 0;
+  await assert.rejects(runtime.start(game), /läuft bereits/);
+  assert.deepEqual(calls, []);
+  running = false;
+  old.environment.portBindings.reverse();
+  await runtime.start(game);
+  assert.ok(calls.some(c => c.path.includes('/start?')));
+  assert.ok(calls.every(c => c.method !== 'PUT'));
+});
 
 test('DayZ uses the stable native Linux library without Steam authentication in game definitions', () => {
   const value = definition();

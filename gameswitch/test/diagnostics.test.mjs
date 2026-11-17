@@ -81,14 +81,14 @@ test('controller persists correlated friendly errors with failed backup stage an
   const output = [];
   const controller = new Controller(store, runtime, createDiagnostics({ write: line => output.push(line) }));
   const requestId = randomUUID();
-  controller.begin('activate', target.id, undefined, { requestId }); await controller.pending;
+  controller.begin('activate', target.id, undefined, { requestId, sourceProfileId: old.id }); await controller.pending;
   assert.equal(starts, 0); assert.equal(store.state.job.status, 'failed'); assert.equal(store.state.job.errorId, requestId);
   assert.match(store.state.job.error, /Steam-Cache/); assert.ok(store.state.job.error.includes(requestId));
-  assert.ok(!JSON.stringify(store.state).includes('PRIVATE_')); assert.equal(store.state.pendingSafetyBackupProfileId, old.id);
+  assert.ok(!JSON.stringify(store.state).includes('PRIVATE_')); assert.deepEqual(store.state.pendingSafetyBackupProfileIds, [old.id]);
   const record = JSON.parse(output[0]);
   assert.equal(record.stage, 'Sicherung abschließen'); assert.equal(record.sourceProfileId, old.id); assert.equal(record.profileId, target.id);
   assert.equal(JSON.parse(await fs.readFile(path.join(directory, 'state.json'), 'utf8')).job.errorId, requestId);
   const throwing = new Controller(store, runtime, { error() { throw new Error('Logging failed'); } });
-  throwing.begin('activate', target.id); await throwing.pending;
+  throwing.begin('parallel', old.id); await throwing.pending;
   assert.equal(throwing.busy, false); assert.equal(store.state.job.status, 'failed'); assert.match(store.state.job.errorId, /^[a-f0-9-]{36}$/);
 });

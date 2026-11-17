@@ -64,10 +64,10 @@ test('missing Steam setup refuses activation before save, stop or safety-marker 
   const runtime = { status: async profile => ({ running: profile.id === current.id }), preflight: profile => requireGameLibrary(f.config, profile) };
   for (const method of ['save', 'stop', 'backup', 'start', 'install']) runtime[method] = async () => calls.push(method);
   const controller = new Controller(store, runtime);
-  controller.begin('activate', target.id); await controller.pending;
+  controller.begin('activate', target.id, undefined, { sourceProfileId: current.id }); await controller.pending;
   assert.equal(store.state.job.status, 'failed');
   assert.match(store.state.job.error, /Steam-Einrichtung/);
   assert.equal(store.state.activeProfileId, current.id);
-  assert.equal(store.state.pendingSafetyBackupProfileId, null);
+  assert.deepEqual(store.state.pendingSafetyBackupProfileIds, []);
   assert.deepEqual(calls, []);
 });

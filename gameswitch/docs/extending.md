@@ -6,7 +6,7 @@ Neue Spiele sind eine Codeänderung durch den Administrator. Die Weboberfläche 
 2. Unter `server/catalog.mjs` den Katalogeintrag und die Eingabevalidierung erweitern. Nur benötigte Felder erlauben; Dateipfade, ausführbare Befehle und fremde Download-URLs bleiben gesperrt.
 3. Unter `server/templates.mjs` die Definition erzeugen. Installations-/Startbefehle sind fest im Code. Docker-Isolation und Ressourcenlimits beibehalten; keine Autostart-/Autorestart-Aktionen außerhalb des Orchestrators. Spielstand, Ports, Stop-Verhalten und Bereitschaftssignal explizit festlegen.
 4. Benötigte Spieleingaben in `web/` ergänzen. Eine Bibliothekskachel allein gilt nicht als Unterstützung. Geheimnisse über `server/profile-secrets.mjs` getrennt speichern und nur Setzkennzeichen zurückgeben; öffentliche Profilfelder explizit freigeben. Alle zusätzlichen Ports unter `server/game-ports.mjs` prüfen.
-5. Adaptertests, erfolgreichen Start, geordnetes Stoppen, Backup, Wiederherstellung und Wechsel auf einem Linux-Testhost nachweisen. Eine vorbereitete Integration kann ein Formular erhalten, muss den Start bis zu ihren noch fehlenden Voraussetzungen ausdrücklich sperren. Ein Katalogeintrag allein bedeutet keine bestätigte Spielbereitschaft; die Prüflage gehört nach `docs/validation.md`.
+5. Adaptertests, Start, geordnetes Stoppen, Backup und Wiederherstellung auf einem Linux-Testhost nachweisen. Den Start neben einem laufenden Profil mit getrennten Ports sowie einen gezielten Wechsel prüfen. Eine vorbereitete Integration kann ein Formular erhalten, muss den Start bis zu ihren noch fehlenden Voraussetzungen ausdrücklich sperren. Die Prüflage gehört nach `docs/validation.md`.
 
 Die gemeinsame Lebenszyklussteuerung in `server/controller.mjs` und der Laufzeitadapter in `server/runtime.mjs` bleiben die einzigen Wege zum Starten und Stoppen. Ein neues Spiel darf diesen Pfad nicht umgehen.
 
@@ -37,7 +37,7 @@ Die Erstvorbereitung lässt sich im angemeldeten Panel über „Steam einrichten
 | Spiel | Festgelegte Vorlage | Profil und Verwaltung |
 | --- | --- | --- |
 | Arma 3 | Offizielle stabile Linux-Dedicated-App `233780`, Workshop-Inhalte des Spiels `107410`; `arma3server_x64` | Fünf freigegebene Vanilla-Missionen; Standard `MP_COOP_m01.Stratis`. Bis zu 30 einzelne Workshop-Mod-IDs in Ladereihenfolge und bis zu 20 individuelle SteamID64 für Admins. UDP Spielport bis Spielport + 4, Standard 2302–2306. |
-| DayZ | Offizielle stabile Linux-Dedicated-App `223350`, Workshop-Inhalte des Spiels `221100`; `DayZServer` | Zunächst nur `dayzOffline.chernarusplus` (Chernarus). Bis zu 30 einzelne Workshop-Mod-IDs. UDP Spielport und Spielport + 1 sowie separater Steam-Query-Port, standardmäßig 27016. |
+| DayZ | Offizielle stabile Linux-Dedicated-App `223350`, Workshop-Inhalte des Spiels `221100`; `DayZServer` | Zunächst nur `dayzOffline.chernarusplus` (Chernarus). Bis zu 30 einzelne Workshop-Mod-IDs. UDP vom Spielport bis Spielport + 2 sowie separater Steam-Query-Port, standardmäßig 27016. |
 
 Arma erlaubt außerdem `MP_COOP_m03.Altis`, `MP_ZGM_m11.Altis`, `MP_ZGM_m12.Stratis` und `MP_CombatPatrol_01.Altis`. Konfigurierte Spielerplätze können durch die Mission weiter begrenzt sein. Eigene PBOs, DLC-/Custom-Karten, beliebige Startparameter und importierte Launcher-Presets sind nicht Teil dieser ersten Vorlage. Workshop-IDs sind keine Collection-Auflösung; benötigte Abhängigkeiten müssen ebenfalls ausgewählt und vorbereitet werden.
 

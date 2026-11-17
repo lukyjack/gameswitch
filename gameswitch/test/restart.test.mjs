@@ -25,7 +25,7 @@ async function fixture(t, options = {}) {
     async save(profile) {
       calls.push(`save:${profile.id}`);
       const persisted = JSON.parse(await fs.readFile(path.join(directory, 'state.json'), 'utf8'));
-      assert.equal(persisted.pendingSafetyBackupProfileId, profile.id, 'intent must be durable before saving');
+      assert.ok(persisted.pendingSafetyBackupProfileIds.includes(profile.id), 'intent must be durable before saving');
       assert.equal(persisted.job.type, 'restart');
       if (options.onSave) await options.onSave();
       if (fail === 'save') throw new Error('Save failed');
@@ -47,7 +47,7 @@ async function fixture(t, options = {}) {
       calls.push(`start:${profile.id}`);
       assert.equal([...running.values()].some(Boolean), false);
       const persisted = JSON.parse(await fs.readFile(path.join(directory, 'state.json'), 'utf8'));
-      assert.equal(persisted.pendingSafetyBackupProfileId, null, 'completed backup must be durable before starting');
+      assert.ok(!persisted.pendingSafetyBackupProfileIds.includes(profile.id), 'completed backup must be durable before starting');
       assert.equal(persisted.backups[0].runtimeId, 'restart-snapshot');
       running.set(profile.id, true);
     },
@@ -100,7 +100,7 @@ test('restart saves, confirms graceful stop, snapshots and starts the same insta
   assert.equal(f.running.get(f.other.id), false);
   assert.equal(f.instance.store.state.activeProfileId, f.first.id);
   assert.equal(f.instance.store.state.backups[0].profileId, f.first.id);
-  assert.equal(f.instance.store.state.pendingSafetyBackupProfileId, null);
+  assert.deepEqual(f.instance.store.state.pendingSafetyBackupProfileIds, []);
   assert.ok(f.instance.store.state.job.steps.every(step => step.status === 'completed'));
   assert.ok(f.instance.store.state.events.some(event => event.message.includes('Serverneustart')));
 });
@@ -111,7 +111,6 @@ test('restart rejects stopped, wrong, uninstalled or recovery-blocked targets be
     { name: 'wrong running profile', prepare: f => { f.running.set(f.first.id, false); f.running.set(f.other.id, true); } },
     { name: 'uninstalled', prepare: f => { f.first.installed = false; } },
     { name: 'incomplete restore', prepare: f => f.instance.store.state.recoveryRequiredProfileIds.push(f.first.id) },
-    { name: 'other pending safety backup', prepare: f => { f.instance.store.state.pendingSafetyBackupProfileId = f.other.id; } },
   ];
   for (const scenario of cases) await t.test(scenario.name, async child => {
     const f = await fixture(child); await f.setup(); scenario.prepare(f);
@@ -143,7 +142,7 @@ test('save, stop or backup failure never starts or installs and keeps the durabl
     assert.equal(f.instance.store.state.job.status, 'failed');
     assert.ok(!f.calls.some(call => call.startsWith('start:') || call === 'install'));
     const persisted = JSON.parse(await fs.readFile(path.join(f.directory, 'state.json'), 'utf8'));
-    assert.equal(persisted.pendingSafetyBackupProfileId, f.first.id);
+    assert.deepEqual(persisted.pendingSafetyBackupProfileIds, [f.first.id]);
     assert.equal(persisted.backups.length, 0);
   });
 });
@@ -165,7 +164,7 @@ test('restart freshly checks every profile and refuses an externally started ser
   const f = await fixture(t, { afterBackup: ({ running, other }) => running.set(other.id, true) }); await f.setup();
   await f.request(`/api/profiles/${f.first.id}/restart`); await f.instance.controller.pending;
   assert.equal(f.instance.store.state.job.status, 'failed');
-  assert.match(f.instance.store.state.job.error, /außerhalb/);
+  assert.match(f.instance.store.state.job.error, /Ports/);
   assert.equal(f.running.get(f.first.id), false);
   assert.equal(f.running.get(f.other.id), true);
   assert.equal(f.instance.store.state.backups.length, 1);

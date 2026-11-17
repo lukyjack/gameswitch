@@ -8,7 +8,7 @@ Diese Anleitung beschreibt den Betrieb auf einem einzelnen VPS. Die konkrete Zie
 - PufferPanel aus **diesem Fork** auf Loopback, Docker für Spiele. Die neue Backup-Schnittstelle ist Voraussetzung.
 - GameSwitch als eigener Systembenutzer ohne Docker-Rechte, nur auf `127.0.0.1:3001`.
 - HTTPS-Reverse-Proxy vor GameSwitch; Verwaltung bevorzugt zusätzlich auf VPN beschränken.
-- Nur benötigte Spielports veröffentlichen: typischerweise Minecraft TCP 25565, GMod TCP/UDP 27015. Arma 3 verwendet fünf aufeinanderfolgende UDP-Ports, standardmäßig 2302–2306; DayZ verwendet UDP Spielport und Spielport + 1 sowie den separaten Query-Port, standardmäßig 27016 (Serverbrowser). Die tatsächlichen Profilports sind maßgeblich. PufferPanel 8080 und SFTP 5657 bleiben administrativ erreichbar.
+- Nur benötigte Spielports veröffentlichen. Minecraft nutzt typischerweise TCP 25565, GMod TCP und UDP 27015. Arma 3 verwendet fünf aufeinanderfolgende UDP-Ports, standardmäßig 2302–2306. DayZ verwendet UDP vom Spielport bis Spielport + 2 und einen separaten Query-Port, standardmäßig 27016. Für den Parallelbetrieb von Arma 3 und DayZ müssen sich ihre UDP-Portbereiche unterscheiden, etwa mit 2312–2314 für DayZ. PufferPanel 8080 und SFTP 5657 bleiben administrativ erreichbar.
 
 ## GameSwitch bauen
 
@@ -50,13 +50,17 @@ GAME_UID=1000
 GAME_GID=1000
 ```
 
-UID/GID müssen zur Dienstidentität des PufferPanel-Daemons und zum Besitzer der Serververzeichnisse auf dem Testhost passen: PufferPanel als unprivilegierten Benutzer mit beispielsweise UID/GID 1000 und benötigter Docker-Gruppenmitgliedschaft betreiben, `GAME_UID`/`GAME_GID` entsprechend setzen. Der Daemon schreibt Installationsdateien unter seiner eigenen Identität. Die Spielecontainer laufen unter derselben Dateisystemidentität. Der separate GameSwitch-Benutzer hat keine Docker-Gruppenmitgliedschaft. Nicht einfach `0` verwenden, wenn Dateirechte fehlschlagen. Das Standardbudget lässt 3 GB für Betriebssystem, Panel, Dateicache und Backupverarbeitung frei; ein Profil kann maximal 13 GB reservieren.
+UID/GID müssen zur Dienstidentität des PufferPanel-Daemons und zum Besitzer der Serververzeichnisse auf dem Testhost passen: PufferPanel als unprivilegierten Benutzer mit beispielsweise UID/GID 1000 und benötigter Docker-Gruppenmitgliedschaft betreiben, `GAME_UID`/`GAME_GID` entsprechend setzen. Der Daemon schreibt Installationsdateien unter seiner eigenen Identität. Die Spielecontainer laufen unter derselben Dateisystemidentität. Der separate GameSwitch-Benutzer hat keine Docker-Gruppenmitgliedschaft. Nicht einfach `0` verwenden, wenn Dateirechte fehlschlagen.
+
+Das Spielserverbudget entspricht `HOST_MEMORY_MB` abzüglich `RESERVED_MEMORY_MB`. Im Standardbeispiel bleiben 13312 MB (13 GiB) für die Summe der konfigurierten RAM-Limits laufender Profile. Minecraft mit 6144 MB und GMod mit 4096 MB passen in dieses Beispielbudget. Die CPU-Limits sind Obergrenzen pro Container. Gleichzeitige Last mehrerer Spiele teilt sich die verfügbare Host-CPU.
 
 Beispiel-Service: [gameswitch.service](../deploy/gameswitch.service). Er setzt `/opt/gameswitch/gameswitch` voraus. Beispiel-Proxy: [Caddyfile](../deploy/Caddyfile.example). Dateien vor Installation an Domain, Dateisystem und Betriebssystem anpassen.
 
 Für eine öffentliche IP ohne Domain steht [Caddyfile.ip.example](../deploy/Caddyfile.ip.example) bereit. Mit der geprüften Caddy-Version 2.11.9 wird ein öffentlich vertrauenswürdiges Let's-Encrypt-IP-Zertifikat im `shortlived`-Profil angefordert und automatisch erneuert. Das Caddy-Datenverzeichnis muss dauerhaft erhalten bleiben; HTTPS/ACME über Port 80/443 erreichbar halten. Im GameSwitch-Dienst dann die echte HTTPS-Origin setzen, `ALLOW_LOOPBACK_HTTP_OVER_SSH` entfernen und `TRUST_LOOPBACK_PROXY=true` nur für den vorgeschalteten lokalen Proxy setzen. Backend und PufferPanel bleiben an Loopback gebunden.
 
 Beim ersten Produktionsstart schreibt der Dienst den Einrichtungstoken in `DATA_DIR/setup-token` mit privaten Dateirechten. In der Entwicklung steht er im lokalen Terminal. Nur als Administrator auslesen, das Konto einrichten und den Token vertraulich behandeln. Der interne PufferPanel-Administrator und sein OAuth-Client werden mit [bootstrap-puffer.mjs](../deploy/bootstrap-puffer.mjs) eingerichtet; die gepatchte CLI nimmt das Passwort ausschließlich über `--password-stdin` entgegen. Diese internen Zugangsdaten erscheinen nicht in Prozessargumenten oder Ausgabe. Sitzungen sind pro Prozess; ein Neustart meldet Browser ab. Ein einzelner GameSwitch-Prozess verwaltet ein Datenverzeichnis; mehrere parallele Instanzen mit denselben Dateien werden nicht unterstützt.
+
+Vor dem Upgrade auf den Parallelbetrieb `DATA_DIR/state.json` sichern. Beim nächsten Speichern wird der Zustand auf Schema 2 migriert. Eine vorhandene offene Sicherheitskopie bleibt dem betroffenen Profil zugeordnet. Für einen Rollback auf einen älteren Dienst mit Schema 1 ist der Zustand vor dem Upgrade erforderlich.
 
 ## Steam-Einrichtung im Panel aktivieren
 
@@ -148,11 +152,11 @@ Neue Portalziele können zusätzliche Chunkgenerierung verursachen. Sichtweite 1
 
 1. Ohne Anmeldung und mit falscher Origin dürfen Profilaktionen nicht möglich sein. HTTPS und Secure-Cookies im Browser kontrollieren.
 2. Minecraft-Profil anlegen, starten, eine erkennbare Weltänderung speichern.
-3. Zum zweiten Minecraft-Profil und dann zu GMod mit eigener öffentlicher beziehungsweise ungelisteter Collection wechseln. Zu jedem Zeitpunkt darf nur ein Profil laufen.
-4. Zum ursprünglichen Profil zurückwechseln und die Weltänderung prüfen. Backup separat wiederherstellen.
-5. Einen vollen Backupdatenträger und einen PufferPanel-Ausfall testen: kein neuer Spielstart nach gescheitertem Backup.
-6. Panel während eines Wechsels abbrechen. Nach Neustart darf kein zweiter Server unbemerkt dazukommen.
+3. GMod mit eigener öffentlicher beziehungsweise ungelisteter Collection parallel starten. Beide Spielprozesse, Ports und Konsolen prüfen. GMod neu starten und danach stoppen. Prüfen, dass Minecraft weiter erreichbar ist und GMod ein eigenes Sicherheitsbackup erhält.
+4. Mit einem zweiten Minecraft-Profil denselben TCP-Port sowie mit getrenntem Port ein überschrittenes RAM-Budget prüfen. Der Start muss in beiden Fällen abbrechen. Danach bei allein laufendem Minecraft einen gezielten Wechsel zu einem zulässigen Ziel testen. Zum ursprünglichen Profil zurückkehren, Weltänderung überprüfen und sein Backup separat wiederherstellen.
+5. Einen vollen Backupdatenträger und einen PufferPanel-Ausfall simulieren. Beim Wechsel muss ein fehlgeschlagenes Quellbackup den Zielstart blockieren. Nach einem fehlgeschlagenen Backup beim Stopp muss die Verpflichtung für das betroffene Profil erhalten bleiben.
+6. GameSwitch während eines Profilvorgangs beenden. Nach seinem Neustart mit PufferPanel abgleichen, welche Profile laufen und welche Backups noch ausstehen. Ein unterbrochener Vorgang muss als fehlgeschlagen erscheinen.
 7. Effektive Containerkonfiguration prüfen: unprivilegierter Benutzer, Bridge-Netz, keine zusätzlichen Hostfreigaben außerhalb des Serververzeichnisses und erforderlicher schreibgeschützter Laufzeitdateien, keine zusätzlichen Capabilities, `no-new-privileges`, RAM-/CPU-/PID-Limits.
 8. Backup auf einen anderen Speicher kopieren, Zugriff beschränken und Wiederherstellung von dort testen.
 
-Vor diesem Nachweis ist die echte Laufzeit eine integrierte, aber nicht auf dem Zielsystem abgenommene Funktion. Die aktuelle Startprüfung bestätigt einen laufenden Prozess, keine vollständig geladene Welt oder einen beitrittsbereiten Spielport. Große Modpacks können lange initialisieren; CPU-Kerne allein garantieren keine Minecraft-Tickrate. Ein gamespezifisches Bereitschaftssignal ist vor einem verlässlichen Produktionsstatus zu ergänzen.
+Die Abnahme des neuen Parallelbetriebs auf dem Zielsystem steht aus. Die Startprüfung bestätigt einen laufenden Prozess. Spielbeitritt und vollständig geladene Welt sind separat zu prüfen. Große Modpacks können lange initialisieren und in der Startphase besonders viel CPU beanspruchen.

@@ -1,3 +1,5 @@
+import { validateGamePorts } from './game-ports.mjs';
+
 // Native Linux server and configuration reference:
 // https://community.bistudio.com/wiki/DayZ:Hosting_a_Linux_Server
 // https://community.bohemia.net/wiki/DayZ:Server_Configuration
@@ -53,9 +55,7 @@ export function dayzSettings(profile) {
   }
   const admins = adminSteamIds(profile.adminSteamIds);
   if (admins.length && !mods.includes(DAYZ_MODS.vpp)) throw invalid(`DayZ vergibt Steam-ID-Adminrechte über VPPAdminTools. Bitte CF (${DAYZ_MODS.cf}) und VPPAdminTools (${DAYZ_MODS.vpp}) in die Mod-Liste aufnehmen.`);
-  if (!Number.isInteger(profile.port) || profile.port < 1024 || profile.port > 65534) throw invalid('Ungültiger DayZ-Spielport.');
-  const queryPort = profile.queryPort ?? 27016;
-  if (!Number.isInteger(queryPort) || queryPort < 1024 || queryPort > 65535 || [profile.port, profile.port + 1].includes(queryPort)) throw invalid('DayZ benötigt einen getrennten gültigen Steam-Abfrageport.');
+  const queryPort = validateGamePorts(profile).find(binding => binding.purpose === 'query').port;
   if (!Number.isInteger(profile.maxPlayers) || profile.maxPlayers < 1 || profile.maxPlayers > 40) throw invalid('DayZ unterstützt in dieser Vorlage 1–40 Slots.');
   if (typeof profile.name !== 'string' || profile.name.length < 2 || profile.name.length > 60 || forbidden.test(profile.name)) throw invalid('Ungültiger DayZ-Servername.');
   // The title is presentation only. Restrict its engine-config representation

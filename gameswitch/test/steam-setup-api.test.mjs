@@ -147,7 +147,7 @@ test('Steam start accepts only fixed games and bounded numeric Workshop IDs; cre
   assert.deepEqual(f.lifecycleCalls, []);
   assert.equal(f.instance.store.state.activeProfileId, f.sourceId);
   assert.equal(f.instance.store.state.job, null);
-  assert.equal(f.instance.store.state.pendingSafetyBackupProfileId, null);
+  assert.deepEqual(f.instance.store.state.pendingSafetyBackupProfileIds, []);
 });
 
 test('Steam input preserves password whitespace and empty Enter, rejects command framing and never persists credentials', async t => {
@@ -237,14 +237,14 @@ test('Steam session paths and cancel payloads are strict and cancellation never 
   assert.deepEqual(f.steamSetup.calls.cancel, [session.id]);
   assert.deepEqual(f.lifecycleCalls, []);
   assert.equal(f.instance.store.state.activeProfileId, f.sourceId);
-  assert.equal(f.instance.store.state.pendingSafetyBackupProfileId, null);
+  assert.deepEqual(f.instance.store.state.pendingSafetyBackupProfileIds, []);
 });
 
 test('active Steam setup prevents every game lifecycle request, including backup restoration', async t => {
   const f = await fixture(t); await f.setup(); await f.start();
   const backupId = randomUUID();
   f.instance.store.state.backups.push({ id: backupId, profileId: f.sourceId, status: 'completed', runtimeId: 'fixture-backup' });
-  for (const action of ['activate', 'restart', 'stop', 'backup']) assert.equal((await f.post(`/api/profiles/${f.sourceId}/${action}`)).status, 409);
+  for (const action of ['activate', 'parallel', 'switch', 'restart', 'stop', 'backup', 'update']) assert.equal((await f.post(`/api/profiles/${f.sourceId}/${action}`)).status, 409);
   assert.equal((await f.post(`/api/backups/${backupId}/restore`)).status, 409);
   assert.deepEqual(f.lifecycleCalls, []);
   assert.equal(f.instance.store.state.job, null);

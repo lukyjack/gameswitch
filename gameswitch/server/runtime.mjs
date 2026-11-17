@@ -9,18 +9,18 @@ import { ftbEnvironment } from './minecraft-memory.mjs';
 import { readProfileSecrets } from './profile-secrets.mjs';
 import { mergeAdminFile } from './game-admin.mjs';
 import { executeLocalRcon } from './rcon-client.mjs';
-import { validateGamePorts } from './game-ports.mjs';
+import { dockerPortBindings, validateGamePorts } from './game-ports.mjs';
 import { validateRootSteamCache, validateSteamCacheEntries } from './steam-cache.mjs';
 import { requireGameLibrary, libraryGames } from './game-library.mjs';
 import { armaAdminConfig } from './arma.mjs';
 import { DAYZ_ADMIN_PASSWORD, DAYZ_CONFIG_FILE, DAYZ_MODS, VPP_CREDENTIALS_FILE, VPP_PERMISSIONS_DIRECTORY, VPP_SUPERADMINS_FILE, dayzUsesVpp, withDayzAdminPassword } from './dayz.mjs';
+import { upstreamFailure, networkFailure } from './diagnostics.mjs';
 
 const vppPasswordMissing = () => Object.assign(new Error(`VPPAdminTools (${DAYZ_MODS.vpp}) benötigt ein Adminpasswort. Bitte zuerst im Adminbereich des Profils ein Adminpasswort festlegen.`), { status: 409, diagnosticReason: 'admin_password_required' });
 function validAdminPassword(password) {
   if (typeof password !== 'string' || !DAYZ_ADMIN_PASSWORD.test(password)) throw Object.assign(new Error('Adminpasswort: 8–32 Buchstaben, Ziffern, Unterstriche oder Bindestriche.'), { status: 400 });
   return password;
 }
-import { upstreamFailure, networkFailure } from './diagnostics.mjs';
 
 export class SandboxRuntime {
   constructor(config) { this.config = config; this.directory = path.join(config.dataDir, 'sandbox'); }
@@ -109,9 +109,20 @@ SandboxRuntime.prototype.setAdminPassword = async function setAdminPassword(prof
 };
 
 export class PufferRuntime {
-  constructor(config, fetcher = fetch) { this.config = config; this.fetcher = fetcher; this.token = null; this.expires = 0; this.commandOutputs = new Map(); }
+  constructor(config, fetcher = fetch) {
+    this.config = config;
+    this.fetcher = fetcher;
+    this.token = null;
+    this.expires = 0;
+    this.authorization = null;
+    this.commandOutputs = new Map();
+  }
   async authorize() {
     if (this.token && this.expires > Date.now()) return this.token;
+    this.authorization ??= this.fetchToken().finally(() => { this.authorization = null; });
+    return this.authorization;
+  }
+  async fetchToken() {
     let response;
     try { response = await this.fetcher(`${this.config.pufferUrl}/oauth2/token`, {
       method: 'POST', redirect: 'error', signal: AbortSignal.timeout(15000),
@@ -122,7 +133,7 @@ export class PufferRuntime {
     let data;
     try { data = await response.json(); }
     catch { throw Object.assign(new Error('Die Server-Laufzeit hat ungültiges JSON geliefert.'), { diagnosticReason: 'invalid_upstream_response' }); }
-    if (typeof data.access_token !== 'string') throw Object.assign(new Error('Ungültige Laufzeit-Anmeldung.'), { diagnosticReason: 'upstream_auth' });
+    if (typeof data?.access_token !== 'string' || !data.access_token) throw Object.assign(new Error('Ungültige Laufzeit-Anmeldung.'), { diagnosticReason: 'upstream_auth' });
     this.token = data.access_token;
     this.expires = Date.now() + (Number(data.expires_in || 300) - 30) * 1000;
     return this.token;
@@ -165,8 +176,8 @@ export class PufferRuntime {
   endpoint(profile) { return `/api/servers/${encodeURIComponent(profile.serverId)}`; }
   async status(profile) {
     try {
-      const status = await this.request(`${this.endpoint(profile)}/status`);
-      if (status.gameswitchVersion !== 1) throw new Error('Die Laufzeit benötigt den GameSwitch-Backup-Sicherheitspatch.');
+      const status = await this.request(`${this.endpoint(profile)}/status`, { timeout: 10000, maxBytes: 16384 });
+      if (status?.gameswitchVersion !== 1) throw new Error('Die Laufzeit benötigt den GameSwitch-Backup-Sicherheitspatch.');
       if (typeof status.running !== 'boolean') throw new Error('Der Laufzeitstatus ist unklar. Aktion wurde angehalten.');
       if (status.backingUp || status.restoring || status.installing) throw new Error('Die Laufzeit arbeitet noch an Installation oder Sicherung.');
       return status;
@@ -181,7 +192,9 @@ export class PufferRuntime {
       const profileSecrets = ['valheim', 'squad', 'factorio', 'arma3', 'dayz'].includes(profile.gameId) ? await readProfileSecrets(this.config, profile.id) : {};
       await this.request(this.endpoint(profile), { method: 'PUT', body: buildDefinition(profile, { ...this.config, profileSecrets }) });
     }
-    await this.status(profile); // Require patched daemon before any installation/start.
+    const status = await this.status(profile); // Require patched daemon before any installation/start.
+    if (status.running) throw Object.assign(new Error('Dieses Profil läuft bereits.'), { status: 409 });
+    if (status.provisioned === false) throw Object.assign(new Error('Die Laufzeitinstanz konnte nach dem Anlegen nicht bestätigt werden.'), { diagnosticReason: 'upstream_not_found' });
     await this.request(`${this.endpoint(profile)}/install?wait=true`, { method: 'POST', timeout: 1800000 });
     return { libraryUpdatedAt: library?.updatedAt };
   }
@@ -220,7 +233,17 @@ export class PufferRuntime {
     if ((await this.status(profile)).running) throw new Error('Instanz wurde nicht beendet. Wechsel abgebrochen.');
   }
   async start(profile) {
-    if (profile.gameId) validateGamePorts(profile, this.config);
+    if (profile.gameId === 'dayz') {
+      const bindings = dockerPortBindings(profile, this.config);
+      if ((await this.status(profile)).running) throw Object.assign(new Error('Dieses Profil läuft bereits. Es wurde nicht neu gestartet.'), { status: 409 });
+      const definition = await this.request(`${this.endpoint(profile)}/definition`);
+      const currentBindings = definition?.environment?.portBindings ?? [];
+      if (definition?.environment?.type !== 'docker' || !Array.isArray(currentBindings)) throw Object.assign(new Error('Ungültige DayZ-Portkonfiguration.'), { diagnosticReason: 'invalid_upstream_response' });
+      if (currentBindings.length !== bindings.length || !bindings.every(binding => currentBindings.includes(binding))) {
+        definition.environment.portBindings = bindings;
+        await this.request(`${this.endpoint(profile)}/definition`, { method: 'PUT', body: definition });
+      }
+    } else if (profile.gameId) validateGamePorts(profile, this.config);
     if (profile.gameId === 'minecraft' && profile.loader === 'ftb') {
       if ((await this.status(profile)).running) throw Object.assign(new Error('Dieses Profil läuft bereits. Es wurde nicht neu gestartet.'), { status: 409 });
       const definition = await this.request(`${this.endpoint(profile)}/definition`);

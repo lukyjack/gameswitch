@@ -4,11 +4,23 @@ import { libraryGames } from './game-library.mjs';
 import { profilesHavePortCollision } from './game-ports.mjs';
 const quietDiagnostics = createDiagnostics({ write: () => {} });
 
+const actions = {
+  parallel: { title: 'Serverstart', steps: ['Laufzeit und Ressourcen prüfen', 'Ausstehende Sicherung abschließen', 'Profil installieren', 'Profil starten'] },
+  activate: { title: 'Profilwechsel', steps: ['Laufzeit prüfen', 'Spielstand speichern', 'Alte Instanz stoppen', 'Sicherung abschließen', 'Ziel installieren', 'Ziel starten'] },
+  restart: { title: 'Serverneustart', steps: ['Laufzeit prüfen', 'Spielstand speichern', 'Instanz stoppen', 'Stopp bestätigen', 'Sicherung abschließen', 'Instanz starten'] },
+  update: { title: 'Server- und Mod-Update', steps: ['Laufzeit prüfen', 'Spielstand speichern', 'Instanz stoppen', 'Sicherung abschließen', 'Server & Mods aktualisieren', 'Instanz starten'] },
+  stop: { title: 'Serverstopp', steps: ['Laufzeit prüfen', 'Spielstand speichern', 'Instanz stoppen', 'Sicherung abschließen'] },
+  backup: { title: 'Sicherung', steps: ['Laufzeit prüfen', 'Sicherung abschließen'] },
+  restore: { title: 'Wiederherstellung', steps: ['Laufzeit prüfen', 'Sicherheitskopie erstellen', 'Sicherung wiederherstellen'] },
+};
+
+const lifecycleError = (message, diagnosticReason) => Object.assign(new Error(message), { diagnosticReason });
+
 export class Controller {
-  constructor(store, runtime, diagnostics = quietDiagnostics) { this.store = store; this.runtime = runtime; this.diagnostics = diagnostics; this.busy = false; this.pending = null; }
+  constructor(store, runtime, diagnostics = quietDiagnostics, config = {}) { this.store = store; this.runtime = runtime; this.diagnostics = diagnostics; this.config = config; this.busy = false; this.pending = null; }
   recordFailure(error, job, profile, stage) {
     let id;
-    try { id = this.diagnostics.error(error, { requestId: job.requestId, jobId: job.id, profileId: profile.id, sourceProfileId: this.store.state.pendingSafetyBackupProfileId, gameId: profile.gameId, type: job.type, operation: job.type, status: 'failed', stage }); } catch { /* An injected logger must also fail soft. */ }
+    try { id = this.diagnostics.error(error, { requestId: job.requestId, jobId: job.id, profileId: profile.id, sourceProfileId: job.sourceProfileId, gameId: profile.gameId, type: job.type, operation: job.type, status: 'failed', stage }); } catch { /* An injected logger must also fail soft. */ }
     if (!validCorrelationId(id)) id = randomUUID();
     job.errorId = id;
     job.error = `${friendlyDiagnosticMessage(error)} Fehler-ID: ${id}`;
@@ -18,31 +30,93 @@ export class Controller {
     if (!profile) { const error = new Error('Profil nicht gefunden.'); error.status = 404; throw error; }
     return profile;
   }
-  async reconcile() {
-    const running = [];
-    for (const profile of this.store.state.profiles) {
-      try {
-        const status = await this.runtime.status(profile);
-        profile.status = status.running ? 'running' : 'stopped';
-        if (status.running) running.push(profile);
-      } catch (error) { profile.status = 'unknown'; throw error; }
+  runningProfiles() {
+    return this.store.state.profiles.filter(profile => profile.status === 'running');
+  }
+  syncActiveProfile() {
+    this.store.state.activeProfileId = this.runningProfiles()[0]?.id ?? null;
+  }
+  reconcile() {
+    // Share an in-flight status read with polling. Publish one complete snapshot
+    // before a lifecycle job can proceed with writes.
+    if (!this.reconciling) this.reconciling = this.refreshStatuses().finally(() => { this.reconciling = null; });
+    return this.reconciling;
+  }
+  async refreshStatuses() {
+    const profiles = [...this.store.state.profiles];
+    const results = await Promise.allSettled(profiles.map(async profile => {
+      const status = await this.runtime.status(profile);
+      if (typeof status?.running !== 'boolean') throw lifecycleError('Laufzeitstatus ist unklar.', 'runtime_status_invalid');
+      return status.running ? 'running' : 'stopped';
+    }));
+    const errors = new Map();
+    results.forEach((result, index) => {
+      const profile = profiles[index];
+      profile.status = result.status === 'fulfilled' ? result.value : 'unknown';
+      if (result.status === 'rejected') errors.set(profile.id, result.reason);
+    });
+    this.syncActiveProfile();
+    return errors;
+  }
+  async requireStatuses(profile) {
+    const errors = await this.reconcile();
+    if (profile) {
+      if (errors.has(profile.id)) throw errors.get(profile.id);
+    } else if (errors.size) {
+      throw errors.values().next().value;
     }
-    this.store.state.activeProfileId = running.length === 1 ? running[0].id : null;
-    if (running.length > 1) throw new Error('Mehrere Instanzen laufen außerhalb von GameSwitch. Bitte zuerst in PufferPanel stoppen.');
-    return running[0];
+  }
+  checkConcurrent(profile, excludedId) {
+    const others = this.runningProfiles().filter(other => other.id !== profile.id && other.id !== excludedId);
+    if (others.some(other => profilesHavePortCollision(other, profile))) throw lifecycleError('Ein anderes laufendes Profil nutzt dieselben Ports.', 'port_conflict');
+    const total = [profile, ...others].reduce((sum, server) => sum + (server.memoryMb ?? 0), 0);
+    if (this.config.memoryMb && total > this.config.memoryMb - (this.config.reservedMemoryMb ?? 0)) throw lifecycleError('RAM-Budget überschritten.', 'memory_capacity');
+  }
+  requireStopped(profile) {
+    if (profile.status === 'running') throw lifecycleError('Dieses Profil läuft bereits.', 'already_running');
+  }
+  async confirmStopped(profile) {
+    const status = await this.runtime.status(profile);
+    if (status?.running !== false) throw lifecycleError('Stopp wurde nicht bestätigt.', 'runtime_status_invalid');
+    profile.status = 'stopped';
+    this.syncActiveProfile();
+  }
+  async markPendingBackup(profile) {
+    const pending = this.store.state.pendingSafetyBackupProfileIds;
+    if (!pending.includes(profile.id)) pending.push(profile.id);
+    await this.store.save();
+  }
+  async completePendingBackup(profile) {
+    if (this.store.state.pendingSafetyBackupProfileIds.includes(profile.id)) await this.backup(profile, 'Nach-Stopp');
+  }
+  async install(profile) {
+    if (profile.installed) return;
+    await this.requireStatuses();
+    this.requireStopped(profile);
+    this.checkConcurrent(profile);
+    const result = await this.runtime.install(profile);
+    profile.installed = true;
+    if (typeof result?.libraryUpdatedAt === 'string') profile.libraryUpdatedAt = result.libraryUpdatedAt;
+  }
+  async start(profile, switching = false) {
+    await this.requireStatuses();
+    this.requireStopped(profile);
+    if (switching && this.runningProfiles().length > 0) throw lifecycleError('Eine Instanz wurde außerhalb von GameSwitch gestartet.', 'outside_instance');
+    this.checkConcurrent(profile);
+    if (this.store.state.pendingSafetyBackupProfileIds.includes(profile.id)) throw lifecycleError('Die Sicherheitskopie wurde nicht abgeschlossen.', 'backup_unconfirmed');
+    await this.runtime.start(profile);
+    profile.status = 'running';
+    this.syncActiveProfile();
   }
   begin(type, profileId, backupId, context = {}) {
     if (!this.store.healthy) { const error = new Error('Persistenzfehler: Aktionen sind bis zum Dienstneustart gesperrt.'); error.status = 503; throw error; }
     if (this.busy) { const error = new Error('Eine Serveraktion läuft bereits.'); error.status = 409; throw error; }
     const profile = this.profile(profileId);
     if (type === 'update' && !libraryGames.has(profile.gameId)) { const error = new Error('Server & Mods lassen sich nur für Arma 3 und DayZ aus der Steam-Bibliothek aktualisieren.'); error.status = 400; throw error; }
-    const labels = type === 'activate' ? ['Laufzeit prüfen', 'Spielstand speichern', 'Alte Instanz stoppen', 'Sicherung abschließen', 'Ziel installieren', 'Ziel starten']
-      : type === 'restart' ? ['Laufzeit prüfen', 'Spielstand speichern', 'Instanz stoppen', 'Stopp bestätigen', 'Sicherung abschließen', 'Instanz starten']
-      : type === 'update' ? ['Laufzeit prüfen', 'Spielstand speichern', 'Instanz stoppen', 'Sicherung abschließen', 'Server & Mods aktualisieren', 'Instanz starten']
-      : type === 'restore' ? ['Laufzeit prüfen', 'Sicherheitskopie erstellen', 'Sicherung wiederherstellen']
-      : type === 'backup' ? ['Laufzeit prüfen', 'Sicherung abschließen'] : ['Laufzeit prüfen', 'Spielstand speichern', 'Instanz stoppen'];
+    const labels = actions[type].steps;
     const job = { id: randomUUID(), type, status: 'running', profileId, createdAt: new Date().toISOString(), steps: labels.map(label => ({ label, status: 'pending' })) };
     if (validCorrelationId(context.requestId)) job.requestId = context.requestId;
+    if (type === 'activate') job.sourceProfileId = context.sourceProfileId;
     this.busy = true;
     this.store.state.job = job;
     this.pending = new Promise(resolve => setImmediate(resolve)).then(() => this.run(job, profile, backupId)).catch(error => {
@@ -62,109 +136,120 @@ export class Controller {
     const runtime = await this.runtime.backup(profile, name);
     const backup = { id: randomUUID(), profileId: profile.id, profileName: profile.name, name, createdAt: new Date().toISOString(), status: 'completed', runtimeId: runtime.runtimeId };
     this.store.state.backups.unshift(backup);
-    if (this.store.state.pendingSafetyBackupProfileId === profile.id) this.store.state.pendingSafetyBackupProfileId = null;
+    this.store.state.pendingSafetyBackupProfileIds = this.store.state.pendingSafetyBackupProfileIds.filter(id => id !== profile.id);
     this.store.event(`Sicherung für „${profile.name}“ abgeschlossen.`);
     await this.store.save();
     return backup;
   }
+  async prepare(job, profile) {
+    const startsOrInstalls = ['parallel', 'activate', 'restart', 'update'].includes(job.type);
+    await this.requireStatuses(startsOrInstalls ? undefined : profile);
+
+    if (startsOrInstalls && this.store.state.recoveryRequiredProfileIds.includes(profile.id)) {
+      throw lifecycleError('Unvollständige Wiederherstellung.', 'recovery_required');
+    }
+    if (['parallel', 'activate'].includes(job.type)) this.requireStopped(profile);
+    if (['restart', 'stop'].includes(job.type) && profile.status !== 'running') {
+      throw lifecycleError('Dieses Profil läuft nicht.', 'not_running');
+    }
+    if (['backup', 'restore'].includes(job.type) && profile.status !== 'stopped') {
+      throw lifecycleError('Profil zuerst sauber stoppen.', 'not_running');
+    }
+    if (['restart', 'update', 'backup', 'restore'].includes(job.type) && !profile.installed) {
+      throw lifecycleError('Profil wurde noch nicht installiert.', 'not_installed');
+    }
+
+    let source;
+    if (job.type === 'activate') {
+      const running = this.runningProfiles();
+      if (running.length !== 1 || running[0].id !== job.sourceProfileId) {
+        throw lifecycleError('Das bestätigte Quellprofil läuft nicht mehr allein.', 'switch_source_changed');
+      }
+      source = running[0];
+    }
+    if (startsOrInstalls) {
+      this.checkConcurrent(profile, source?.id);
+      await this.runtime.preflight?.(profile);
+    }
+    return source;
+  }
+  async stopAndConfirm(profile) {
+    await this.runtime.stop(profile);
+    await this.confirmStopped(profile);
+  }
   async run(job, profile, backupId) {
     try {
-      const current = await this.step(job, 0, () => this.reconcile());
-      if (job.type === 'activate') {
-        if (this.store.state.recoveryRequiredProfileIds.includes(profile.id)) throw new Error('Unvollständige Wiederherstellung: Dieses Profil muss zuerst erfolgreich aus einer Sicherung wiederhergestellt werden.');
-        if (current?.id === profile.id) throw new Error('Dieses Profil läuft bereits.');
-        await this.runtime.preflight?.(profile);
-        const pending = this.store.state.pendingSafetyBackupProfileId ? this.profile(this.store.state.pendingSafetyBackupProfileId) : null;
-        if (pending && current && pending.id !== current.id) throw new Error('Ausstehende Sicherung zuerst für das vorherige Profil abschließen.');
-        const source = current || pending;
-        if (source) { this.store.state.pendingSafetyBackupProfileId = source.id; await this.store.save(); }
-        await this.step(job, 1, async () => { if (current) await this.runtime.save(current); });
-        await this.step(job, 2, async () => { if (current) { await this.runtime.stop(current); current.status = 'stopped'; this.store.state.activeProfileId = null; } });
-        await this.step(job, 3, async () => { if (source) await this.backup(source, 'Vor-Wechsel'); });
-        await this.step(job, 4, async () => {
-          if (profile.installed) return;
-          const result = await this.runtime.install(profile);
-          profile.installed = true;
-          if (typeof result?.libraryUpdatedAt === 'string') profile.libraryUpdatedAt = result.libraryUpdatedAt;
-          await this.store.save();
-        });
-        await this.step(job, 5, async () => {
-          // Re-read every profile immediately before starting; stale browser/state cannot start a second managed server.
-          if (await this.reconcile()) throw new Error('Eine Instanz wurde außerhalb von GameSwitch gestartet.');
-          await this.runtime.start(profile); profile.status = 'running'; this.store.state.activeProfileId = profile.id;
-        });
-      } else if (job.type === 'restart') {
-        if (!profile.installed) throw new Error('Profil wurde noch nicht installiert.');
-        if (this.store.state.recoveryRequiredProfileIds.includes(profile.id)) throw new Error('Unvollständige Wiederherstellung: Dieses Profil muss zuerst erfolgreich aus einer Sicherung wiederhergestellt werden.');
-        if (current?.id !== profile.id) throw new Error('Nur das aktuell laufende Profil kann neu gestartet werden.');
-        if (this.store.state.pendingSafetyBackupProfileId && this.store.state.pendingSafetyBackupProfileId !== profile.id) throw new Error('Ausstehende Sicherung zuerst für das vorherige Profil abschließen.');
-        await this.runtime.preflight?.(profile);
-        // Record the safety obligation before save/stop. A crash or failed backup
-        // must not let a later activate request silently skip this snapshot.
-        this.store.state.pendingSafetyBackupProfileId = profile.id;
-        await this.store.save();
-        await this.step(job, 1, () => this.runtime.save(profile));
-        await this.step(job, 2, () => this.runtime.stop(profile));
-        await this.step(job, 3, async () => {
-          const status = await this.runtime.status(profile);
-          if (status.running !== false) throw new Error('Stopp wurde nicht bestätigt. Neustart bleibt angehalten.');
-          profile.status = 'stopped';
-          this.store.state.activeProfileId = null;
-        });
-        await this.step(job, 4, () => this.backup(profile, 'Vor-Neustart'));
-        await this.step(job, 5, async () => {
-          if (await this.reconcile()) throw new Error('Eine Instanz wurde außerhalb von GameSwitch gestartet.');
-          if (this.store.state.pendingSafetyBackupProfileId) throw new Error('Ausstehende Sicherung verhindert den Neustart.');
-          await this.runtime.start(profile);
-          profile.status = 'running';
-          this.store.state.activeProfileId = profile.id;
-        });
-      } else if (job.type === 'update') {
-        if (!profile.installed) throw new Error('Profil wurde noch nicht installiert.');
-        if (this.store.state.recoveryRequiredProfileIds.includes(profile.id)) throw new Error('Unvollständige Wiederherstellung: Dieses Profil muss zuerst erfolgreich aus einer Sicherung wiederhergestellt werden.');
-        if (this.store.state.pendingSafetyBackupProfileId && this.store.state.pendingSafetyBackupProfileId !== profile.id) throw new Error('Ausstehende Sicherung zuerst für das vorherige Profil abschließen.');
-        const wasRunning = current?.id === profile.id;
-        // The reinstall runs in a container with this profile's port bindings.
-        if (current && !wasRunning && profilesHavePortCollision(current, profile)) throw Object.assign(new Error('Ein anderes laufendes Profil nutzt dieselben Ports.'), { diagnosticReason: 'port_conflict' });
-        // Library, Workshop items and private settings are checked before the
-        // running game is touched.
-        await this.runtime.preflight?.(profile);
-        if (wasRunning) {
-          this.store.state.pendingSafetyBackupProfileId = profile.id;
-          await this.store.save();
+      const source = await this.step(job, 0, () => this.prepare(job, profile));
+      switch (job.type) {
+        case 'parallel':
+          await this.step(job, 1, () => this.completePendingBackup(profile));
+          await this.step(job, 2, () => this.install(profile));
+          await this.step(job, 3, () => this.start(profile));
+          break;
+        case 'activate':
+          await this.step(job, 1, async () => {
+            // The target may still owe a backup from an earlier job. Complete it
+            // before touching the source, then verify the confirmed source again.
+            await this.completePendingBackup(profile);
+            await this.requireStatuses();
+            this.requireStopped(profile);
+            const running = this.runningProfiles();
+            if (running.length !== 1 || running[0].id !== source.id) {
+              throw lifecycleError('Das bestätigte Quellprofil läuft nicht mehr allein.', 'switch_source_changed');
+            }
+            await this.markPendingBackup(source);
+            await this.runtime.save(source);
+          });
+          await this.step(job, 2, () => this.stopAndConfirm(source));
+          await this.step(job, 3, () => this.backup(source, 'Vor-Wechsel'));
+          await this.step(job, 4, () => this.install(profile));
+          await this.step(job, 5, () => this.start(profile, true));
+          break;
+        case 'restart':
+          await this.step(job, 1, async () => {
+            await this.markPendingBackup(profile);
+            await this.runtime.save(profile);
+          });
+          await this.step(job, 2, () => this.runtime.stop(profile));
+          await this.step(job, 3, () => this.confirmStopped(profile));
+          await this.step(job, 4, () => this.backup(profile, 'Vor-Neustart'));
+          await this.step(job, 5, () => this.start(profile));
+          break;
+        case 'update': {
+          const wasRunning = profile.status === 'running';
+          await this.step(job, 1, async () => {
+            if (!wasRunning) return;
+            await this.markPendingBackup(profile);
+            await this.runtime.save(profile);
+          });
+          await this.step(job, 2, async () => {
+            if (wasRunning) await this.runtime.stop(profile);
+            await this.confirmStopped(profile);
+          });
+          await this.step(job, 3, () => this.backup(profile, 'Vor-Update'));
+          await this.step(job, 4, async () => {
+            // The installer uses the same container limits and port bindings.
+            await this.requireStatuses();
+            this.requireStopped(profile);
+            this.checkConcurrent(profile);
+            const result = await this.runtime.update(profile);
+            if (typeof result?.libraryUpdatedAt === 'string') profile.libraryUpdatedAt = result.libraryUpdatedAt;
+          });
+          await this.step(job, 5, async () => { if (wasRunning) await this.start(profile); });
+          break;
         }
-        await this.step(job, 1, async () => { if (wasRunning) await this.runtime.save(profile); });
-        await this.step(job, 2, async () => {
-          if (wasRunning) await this.runtime.stop(profile);
-          const status = await this.runtime.status(profile);
-          if (status.running !== false) throw new Error('Stopp wurde nicht bestätigt. Update bleibt angehalten.');
-          profile.status = 'stopped';
-          if (wasRunning) this.store.state.activeProfileId = null;
-        });
-        await this.step(job, 3, () => this.backup(profile, 'Vor-Update'));
-        await this.step(job, 4, async () => {
-          const result = await this.runtime.update(profile);
-          if (typeof result?.libraryUpdatedAt === 'string') profile.libraryUpdatedAt = result.libraryUpdatedAt;
-          await this.store.save();
-        });
-        await this.step(job, 5, async () => {
-          if (!wasRunning) return;
-          if (await this.reconcile()) throw new Error('Eine Instanz wurde außerhalb von GameSwitch gestartet.');
-          if (this.store.state.pendingSafetyBackupProfileId) throw new Error('Ausstehende Sicherung verhindert den Start.');
-          await this.runtime.start(profile);
-          profile.status = 'running';
-          this.store.state.activeProfileId = profile.id;
-        });
-      } else if (job.type === 'stop') {
-        if (current?.id !== profile.id) throw new Error('Dieses Profil läuft nicht.');
-        this.store.state.pendingSafetyBackupProfileId = profile.id; await this.store.save();
-        await this.step(job, 1, () => this.runtime.save(profile));
-        await this.step(job, 2, async () => { await this.runtime.stop(profile); profile.status = 'stopped'; this.store.state.activeProfileId = null; });
-      } else {
-        if (profile.status !== 'stopped') throw new Error('Profil zuerst sauber stoppen.');
-        if (!profile.installed) throw new Error('Profil wurde noch nicht installiert.');
-        if (job.type === 'backup') await this.step(job, 1, () => this.backup(profile));
-        else {
+        case 'stop':
+          await this.step(job, 1, async () => {
+            await this.markPendingBackup(profile);
+            await this.runtime.save(profile);
+          });
+          await this.step(job, 2, () => this.stopAndConfirm(profile));
+          await this.step(job, 3, () => this.backup(profile, 'Nach-Stopp'));
+          break;
+        case 'backup':
+          await this.step(job, 1, () => this.backup(profile));
+          break;
+        case 'restore': {
           const backup = this.store.state.backups.find(backup => backup.id === backupId && backup.profileId === profile.id);
           if (!backup) throw new Error('Sicherung nicht gefunden.');
           await this.step(job, 1, () => this.backup(profile, 'Vor-Wiederherstellung'));
@@ -174,16 +259,17 @@ export class Controller {
             await this.runtime.restore(profile, backup);
             this.store.state.recoveryRequiredProfileIds = this.store.state.recoveryRequiredProfileIds.filter(id => id !== profile.id);
           });
+          break;
         }
       }
-      job.status = 'completed'; this.store.event(`${job.type === 'activate' ? 'Profilwechsel' : job.type === 'restart' ? 'Serverneustart' : job.type === 'update' ? 'Server- und Mod-Update' : job.type === 'stop' ? 'Serverstopp' : job.type === 'restore' ? 'Wiederherstellung' : 'Sicherung'} für „${profile.name}“ abgeschlossen.`);
+      job.status = 'completed';
+      this.store.event(actions[job.type].title + ' für „' + profile.name + '“ abgeschlossen.');
     } catch (error) {
       job.status = 'failed';
-      const stage = job.steps.find(step => step.status === 'failed' || step.status === 'running')?.label || 'Laufzeit prüfen';
+      const stage = job.steps.find(step => step.status === 'failed' || step.status === 'running')?.label || job.steps[0].label;
       this.recordFailure(error, job, profile, stage);
       this.store.event(job.error, 'error');
-      // Never roll back by blindly starting the old server: target could have started before a timeout.
-      try { await this.reconcile(); } catch { this.store.state.activeProfileId = null; }
+      if (job.steps[0].status === 'completed') await this.reconcile();
     }
     await this.store.save();
   }

@@ -208,7 +208,7 @@ test('Server & Mods update backs up, refreshes and restarts a running DayZ profi
   const profile = f.instance.store.state.profiles.find(item => item.id === id);
   assert.equal(profile.status, 'running'); assert.equal(f.instance.store.state.activeProfileId, id);
   assert.ok(f.instance.store.state.backups.some(backup => backup.profileId === id && backup.name.startsWith('Vor-Update-')));
-  assert.equal(f.instance.store.state.pendingSafetyBackupProfileId, null);
+  assert.deepEqual(f.instance.store.state.pendingSafetyBackupProfileIds, []);
   assert.equal((await f.instance.runtime.read(profile)).updates, 1);
   assert.equal((await f.post(`/api/profiles/${id}/stop`)).status, 202); await f.job();
   assert.equal((await f.post(`/api/profiles/${id}/update`)).status, 202);
@@ -235,8 +235,8 @@ test('update refuses port collisions with another running profile before touchin
   const controller = new Controller(store, runtime);
   controller.begin('update', target.id); await controller.pending;
   assert.equal(store.state.job.status, 'failed');
-  assert.match(store.state.job.error, /dieselben Ports/);
-  assert.equal(store.state.job.steps[0].status, 'completed');
+  assert.match(store.state.job.error, /belegt einen benötigten Spielport/);
+  assert.equal(store.state.job.steps[0].status, 'failed');
   assert.deepEqual(calls, []);
 });
 

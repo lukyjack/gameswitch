@@ -8,7 +8,7 @@ export function gamePorts(profile) {
     case 'minecraft': return [bind(profile.port, 'tcp')];
     case 'gmod': return [bind(profile.port, 'tcp'), bind(profile.port)];
     case 'arma3': return Array.from({ length: 5 }, (_, offset) => bind(profile.port + offset));
-    case 'dayz': return [bind(profile.port), bind(profile.port + 1), bind(profile.queryPort ?? 27016, 'udp', 'query')];
+    case 'dayz': return [bind(profile.port), bind(profile.port + 1), bind(profile.port + 2), bind(profile.queryPort ?? 27016, 'udp', 'query')];
     case 'valheim': return [bind(profile.port), bind(profile.port + 1)];
     case 'terraria': return [bind(profile.port, 'tcp')];
     case 'factorio': return [bind(profile.port)];

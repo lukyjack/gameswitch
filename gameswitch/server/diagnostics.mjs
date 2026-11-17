@@ -11,6 +11,10 @@ const games = new Set(['minecraft', 'gmod', 'squad', 'valheim', 'terraria', 'fac
 games.add('arma3'); games.add('dayz');
 reasons.add('steam_library_required'); reasons.add('steam_mods_required');
 reasons.add('port_conflict'); reasons.add('admin_password_required');
+reasons.add('memory_capacity');
+reasons.add('switch_source_changed');
+operations.add('parallel');
+for (const stage of ['Laufzeit und Ressourcen prüfen', 'Ausstehende Sicherung abschließen', 'Profil installieren', 'Profil starten']) stages.add(stage);
 operations.add('update'); operations.add('admin-password');
 stages.add('Server & Mods aktualisieren');
 codes.add('STEAM_INPUT_UNCERTAIN');
@@ -90,7 +94,9 @@ export function networkFailure(error) {
 const messages = {
   steam_library_required: 'Steam-Einrichtung erforderlich. Die Serverdateien zuerst über „Steam einrichten“ im Panel vorbereiten. Die laufende Instanz bleibt aktiv.',
   steam_mods_required: 'Ausgewählte Workshop-Mods sind noch nicht vorbereitet. Die geschützte Steam-Bibliothek zuerst ergänzen. Die laufende Instanz bleibt aktiv.',
-  port_conflict: 'Ein anderes laufendes Profil nutzt dieselben Ports. Dieses zuerst stoppen oder das Update im laufenden Profil selbst starten.',
+  port_conflict: 'Ein anderes laufendes Profil belegt einen benötigten Spielport. Dieses Profil zuerst stoppen oder ein Profil mit anderen Ports wählen.',
+  memory_capacity: 'Für dieses Profil ist im RAM-Budget neben den laufenden Servern zu wenig Platz. Ein anderes Profil stoppen oder ein Profil mit kleinerem RAM-Limit wählen.',
+  switch_source_changed: 'Der Profilwechsel benötigt genau das bestätigte laufende Profil. Bitte die Übersicht neu prüfen.',
   admin_password_required: 'VPPAdminTools benötigt ein Adminpasswort. Bitte im Adminbereich des Profils ein Adminpasswort festlegen. Die laufende Instanz bleibt aktiv.',
   backup_unsafe_links: 'Die Sicherung wurde wegen unsicherer Datei-Verknüpfungen angehalten. Bitte die Steam-Cache-Pflege prüfen; es wird keine weitere Instanz gestartet.',
   steam_cache_unexpected: 'Der Steam-Cache konnte nicht sicher bereinigt werden. Bitte die vorhandenen Serverdateien prüfen.',

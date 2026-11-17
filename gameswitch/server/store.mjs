@@ -2,6 +2,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
+const stateSchema = 2;
+
 export async function openStore(dataDir) {
   await fs.mkdir(dataDir, { recursive: true, mode: 0o700 });
   const file = path.join(dataDir, 'state.json');
@@ -9,10 +11,16 @@ export async function openStore(dataDir) {
   try { state = JSON.parse(await fs.readFile(file, 'utf8')); }
   catch (error) {
     if (error.code !== 'ENOENT') throw new Error('State file unreadable; refusing to reset saved profiles');
-    state = { schema: 1, admin: null, profiles: [], activeProfileId: null, pendingSafetyBackupProfileId: null, recoveryRequiredProfileIds: [], job: null, backups: [], events: [] };
+    state = { schema: stateSchema, admin: null, profiles: [], activeProfileId: null, pendingSafetyBackupProfileIds: [], recoveryRequiredProfileIds: [], job: null, backups: [], events: [] };
   }
-  if (state.schema !== 1 || !Array.isArray(state.profiles) || !Array.isArray(state.backups) || !Array.isArray(state.events) || (state.admin && (typeof state.admin.username !== 'string' || typeof state.admin.passwordHash !== 'string' || typeof state.admin.salt !== 'string'))) throw new Error('Unsupported or damaged state schema');
-  state.pendingSafetyBackupProfileId ??= null;
+  if (![1, stateSchema].includes(state.schema) || !Array.isArray(state.profiles) || !Array.isArray(state.backups) || !Array.isArray(state.events) || (state.admin && (typeof state.admin.username !== 'string' || typeof state.admin.passwordHash !== 'string' || typeof state.admin.salt !== 'string'))) throw new Error('Unsupported or damaged state schema');
+  if (state.schema === 1) {
+    const legacyPendingBackup = state.pendingSafetyBackupProfileId;
+    state.pendingSafetyBackupProfileIds = legacyPendingBackup == null ? [] : [legacyPendingBackup];
+    delete state.pendingSafetyBackupProfileId;
+    state.schema = stateSchema;
+  }
+  if (!Array.isArray(state.pendingSafetyBackupProfileIds) || state.pendingSafetyBackupProfileIds.some(id => !state.profiles.some(profile => profile.id === id))) throw new Error('Damaged safety backup state');
   state.recoveryRequiredProfileIds ??= [];
   if (!Array.isArray(state.recoveryRequiredProfileIds)) throw new Error('Damaged recovery state');
   let writes = Promise.resolve();
@@ -37,6 +45,8 @@ export async function openStore(dataDir) {
   };
   if (state.job?.status === 'running') {
     state.job.status = 'failed';
+    const interruptedStep = state.job.steps?.find(step => step.status === 'running');
+    if (interruptedStep) interruptedStep.status = 'failed';
     state.job.error = 'Prozess unterbrochen. Laufzeitstatus wird vor der nächsten Aktion neu geprüft.';
     store.event(state.job.error, 'warning');
     await store.save();

@@ -27,7 +27,7 @@ const profileInput = (gameId, patch = {}) => ({
 async function fixture(t, { puffer = false } = {}) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'gameswitch-bohemia-api-'));
   const config = readConfig({
-    DATA_DIR: directory, GAME_LIBRARY_DIR: path.join(directory, 'unprepared-libraries'),
+    DATA_DIR: directory, GAME_LIBRARY_DIR: path.join(directory, 'unprepared-libraries'), HOST_MEMORY_MB: '24576',
     ...(puffer ? { RUNTIME_MODE: 'pufferpanel', PUFFERPANEL_URL: 'http://127.0.0.1:8080', PUFFERPANEL_CLIENT_ID: 'fixture', PUFFERPANEL_CLIENT_SECRET: 'fixture-private-oauth' } : {}),
   });
   const records = [];
@@ -153,8 +153,8 @@ test('both games reject Workshop injection, duplicates, excessive lists and cros
 
 test('derived Arma and DayZ UDP ranges reject administrative overlap, overflow and query collisions', async t => {
   assert.deepEqual(gamePorts(profileInput('arma3')).map(({ port, protocol }) => [port, protocol]), [2302, 2303, 2304, 2305, 2306].map(port => [port, 'udp']));
-  assert.deepEqual(gamePorts(profileInput('dayz')).map(({ port, protocol }) => [port, protocol]), [[2302, 'udp'], [2303, 'udp'], [27016, 'udp']]);
-  for (const profile of [profileInput('arma3', { port: 65533 }), profileInput('arma3', { port: 5654 }), profileInput('dayz', { port: 65535 }), profileInput('dayz', { queryPort: 2303 }), profileInput('dayz', { queryPort: 8080 })]) assert.throws(() => validateGamePorts(profile), error => error.status === 400);
+  assert.deepEqual(gamePorts(profileInput('dayz')).map(({ port, protocol }) => [port, protocol]), [[2302, 'udp'], [2303, 'udp'], [2304, 'udp'], [27016, 'udp']]);
+  for (const profile of [profileInput('arma3', { port: 65533 }), profileInput('arma3', { port: 5654 }), profileInput('dayz', { port: 65534 }), profileInput('dayz', { queryPort: 2303 }), profileInput('dayz', { queryPort: 2304 }), profileInput('dayz', { queryPort: 8080 })]) assert.throws(() => validateGamePorts(profile), error => error.status === 400);
   const f = await fixture(t); await f.setup();
   for (const input of [profileInput('arma3', { port: 65533 }), profileInput('arma3', { port: 5654 }), profileInput('dayz', { queryPort: 2303 }), profileInput('dayz', { queryPort: 5657 })]) assert.equal((await f.post('/api/profiles', input)).status, 400);
   assert.equal(f.instance.store.state.profiles.length, 0);
@@ -194,7 +194,7 @@ test('an unprepared Steam library blocks activation before saving or stopping th
     assert.equal(f.instance.store.state.job.errorId, f.instance.store.state.job.requestId);
     assert.deepEqual(f.lifecycleCalls, []);
     assert.equal(f.instance.store.state.activeProfileId, f.sourceId);
-    assert.equal(f.instance.store.state.pendingSafetyBackupProfileId, null);
+    assert.deepEqual(f.instance.store.state.pendingSafetyBackupProfileIds, []);
     assert.equal(f.instance.store.state.profiles.find(p => p.id === f.sourceId).status, 'running');
   }
   assert.equal(f.records.length, 2);

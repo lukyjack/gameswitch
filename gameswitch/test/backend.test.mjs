@@ -34,6 +34,23 @@ async function fixture(t, extra = {}) {
 
 const profile = (name = 'Minecraft Freunde') => ({ name, gameId: 'minecraft', version: '1.21.4', loader: 'paper', maxPlayers: 12, memoryMb: 6144, port: 25565, eulaAccepted: true });
 
+test('legacy activate HTTP endpoint starts in parallel without stopping the running game', async t => {
+  const f = await fixture(t); await f.setup();
+  const first = (await f.request('/api/profiles', 'POST', profile('Erster Server'))).payload.profile;
+  const second = (await f.request('/api/profiles', 'POST', { ...profile('Zweiter Server'), port: 25566 })).payload.profile;
+  await f.request(`/api/profiles/${first.id}/activate`, 'POST'); await f.instance.controller.pending;
+  assert.equal(f.instance.store.state.job.status, 'completed');
+  const response = await f.request(`/api/profiles/${second.id}/activate`, 'POST');
+  assert.equal(response.payload.job.type, 'parallel');
+  await f.instance.controller.pending;
+  assert.equal(f.instance.store.state.job.status, 'completed');
+  assert.equal((await f.instance.runtime.status(first)).running, true);
+  assert.equal((await f.instance.runtime.status(second)).running, true);
+  const state = (await f.request('/api/state')).payload;
+  assert.deepEqual(state.runningProfileIds, [first.id, second.id]);
+  assert.equal(state.activeProfileId, first.id);
+});
+
 test('storage cleanup requires authentication, explicit confirmation and fixed identifiers', async t => {
   const calls = [];
   const steamSetup = {
@@ -88,7 +105,7 @@ test('strict profile validation rejects shell/URL input, reserved ports and unsa
   assert.throws(() => parseCollection('https://steamcommunity.com.evil.test/sharedfiles/filedetails/?id=123456789'));
 });
 
-test('profile switch is serialized and saves, stops, backs up before next start', async t => {
+test('legacy internal switch remains serialized and backs up before next start', async t => {
   const calls = [];
   const f = await fixture(t, { makeRuntime: config => {
     const runtime = new SandboxRuntime(config);
@@ -106,7 +123,13 @@ test('profile switch is serialized and saves, stops, backs up before next start'
   await f.instance.controller.pending;
   assert.equal(f.instance.store.state.job.status, 'completed');
   calls.length = 0;
-  await f.request(`/api/profiles/${second.id}/activate`, 'POST');
+  const switchRoute = `/api/profiles/${second.id}/switch`;
+  assert.equal((await f.request(switchRoute, 'POST')).status, 400);
+  assert.equal((await f.request(switchRoute, 'POST', { sourceProfileId: second.id })).status, 202);
+  await f.instance.controller.pending;
+  assert.equal(f.instance.store.state.job.status, 'failed');
+  assert.deepEqual(calls, []);
+  assert.equal((await f.request(switchRoute, 'POST', { sourceProfileId: first.id })).status, 202);
   await f.instance.controller.pending;
   assert.deepEqual(calls, ['save:Welt eins', 'stop:Welt eins', 'backup:Welt eins', 'install:Welt zwei', 'start:Welt zwei']);
   const state = (await f.request('/api/state')).payload;
@@ -118,7 +141,7 @@ test('profile switch is serialized and saves, stops, backs up before next start'
   assert.equal(persisted.backups[0].profileId, first.id);
 });
 
-test('backup failure leaves old profile stopped and never starts the target', async t => {
+test('a failed switch requires the source backup before that profile can start again', async t => {
   let failBackup = false;
   const f = await fixture(t, { makeRuntime: config => {
     const runtime = new SandboxRuntime(config);
@@ -131,23 +154,24 @@ test('backup failure leaves old profile stopped and never starts the target', as
   const second = (await f.request('/api/profiles', 'POST', profile('Neuer Server'))).payload.profile;
   await f.request(`/api/profiles/${first.id}/activate`, 'POST'); await f.instance.controller.pending;
   failBackup = true;
-  await f.request(`/api/profiles/${second.id}/activate`, 'POST'); await f.instance.controller.pending;
+  await f.request(`/api/profiles/${second.id}/switch`, 'POST', { sourceProfileId: first.id });
+  await f.instance.controller.pending;
   assert.equal(f.instance.store.state.job.status, 'failed');
   assert.equal(f.instance.store.state.activeProfileId, null);
   assert.equal((await f.instance.runtime.status(second)).running, false);
   assert.equal((await f.instance.runtime.status(first)).running, false);
   assert.equal(f.instance.store.state.backups.length, 0);
-  assert.equal(f.instance.store.state.pendingSafetyBackupProfileId, first.id);
-  await f.request(`/api/profiles/${second.id}/activate`, 'POST'); await f.instance.controller.pending;
+  assert.deepEqual(f.instance.store.state.pendingSafetyBackupProfileIds, [first.id]);
+  await f.request(`/api/profiles/${first.id}/parallel`, 'POST'); await f.instance.controller.pending;
   assert.equal(f.instance.store.state.job.status, 'failed');
-  assert.equal((await f.instance.runtime.status(second)).running, false);
-  assert.equal(f.instance.store.state.pendingSafetyBackupProfileId, first.id);
+  assert.equal((await f.instance.runtime.status(first)).running, false);
+  assert.deepEqual((await f.request('/api/state')).payload.pendingSafetyBackupProfileIds, [first.id]);
   const persisted = JSON.parse(await fs.readFile(path.join(f.directory, 'state.json'), 'utf8'));
-  assert.equal(persisted.pendingSafetyBackupProfileId, first.id);
+  assert.deepEqual(persisted.pendingSafetyBackupProfileIds, [first.id]);
   failBackup = false;
-  await f.request(`/api/profiles/${second.id}/activate`, 'POST'); await f.instance.controller.pending;
+  await f.request(`/api/profiles/${first.id}/parallel`, 'POST'); await f.instance.controller.pending;
   assert.equal(f.instance.store.state.job.status, 'completed');
-  assert.equal(f.instance.store.state.pendingSafetyBackupProfileId, null);
+  assert.deepEqual(f.instance.store.state.pendingSafetyBackupProfileIds, []);
 });
 
 test('restore requires stopped server and makes a recovery snapshot', async t => {
@@ -161,7 +185,7 @@ test('restore requires stopped server and makes a recovery snapshot', async t =>
   const b = f.instance.store.state.backups[0];
   await f.request(`/api/backups/${b.id}/restore`, 'POST'); await f.instance.controller.pending;
   assert.equal(f.instance.store.state.job.status, 'completed');
-  assert.equal(f.instance.store.state.backups.length, 2);
+  assert.equal(f.instance.store.state.backups.length, 3);
   assert.equal((await f.instance.runtime.status(p)).running, false);
 });
 
@@ -178,7 +202,7 @@ test('interrupted lifecycle state survives restart and incomplete restore blocks
   assert.ok(f.instance.store.state.recoveryRequiredProfileIds.includes(p.id));
   const resumed = await createApp({ config: f.config, runtime: f.instance.runtime });
   assert.equal(resumed.bootstrapToken, null);
-  resumed.controller.begin('activate', p.id); await resumed.controller.pending;
+  resumed.controller.begin('parallel', p.id); await resumed.controller.pending;
   assert.equal(resumed.store.state.job.status, 'failed');
   assert.equal((await resumed.runtime.status(p)).running, false);
   resumed.runtime.restore = restore;

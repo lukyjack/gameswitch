@@ -36,7 +36,7 @@ export async function createApp(options = {}) {
   const store = options.store || await openStore(config.dataDir);
   const runtime = options.runtime || (config.mode === 'pufferpanel' ? new PufferRuntime(config, options.fetcher) : new SandboxRuntime(config));
   const diagnostics = options.diagnostics || createDiagnostics();
-  const controller = new Controller(store, runtime, diagnostics);
+  const controller = new Controller(store, runtime, diagnostics, config);
   const steamSetup = options.steamSetup || new SteamSetup(config);
   const catalogProvider = options.providers || providers(options.fetcher);
   const bootstrapToken = store.state.admin ? null : token();
@@ -202,12 +202,11 @@ export async function createApp(options = {}) {
     } catch (error) { clearInterval(heartbeat); unsubscribe(); next(error); }
   });
   app.get('/api/state', asyncRoute(async (req, res) => {
-    if (!controller.busy) {
-      try { await controller.reconcile(); } catch { /* Unknown state is displayed; mutation still fails closed. */ }
-    }
-    const { profiles, activeProfileId, job, backups, events } = store.state;
+    if (!controller.busy) await controller.reconcile();
     const [arma3, dayz] = await Promise.all(['arma3', 'dayz'].map(id => gameLibraryStatus(config, id)));
-    res.json({ mode: config.mode, profiles: profiles.map(publicProfile), activeProfileId, job, backups, events, catalog, runtimeSetup: { arma3, dayz },
+    const { profiles, activeProfileId, pendingSafetyBackupProfileIds, job, backups, events } = store.state;
+    const runningProfileIds = controller.runningProfiles().map(profile => profile.id);
+    res.json({ mode: config.mode, profiles: profiles.map(publicProfile), activeProfileId, runningProfileIds, pendingSafetyBackupProfileIds, job, backups, events, catalog, runtimeSetup: { arma3, dayz },
       host: { name: config.mode === 'sandbox' ? 'Lokale Sandbox · VPS-Zielkonfiguration' : 'Netcup VPS', cpuCores: config.cpuCores, memoryMb: config.memoryMb, reservedMemoryMb: config.reservedMemoryMb },
       security: { authenticated: true, csrf: true, localOnly: ['127.0.0.1', '::1', 'localhost'].includes(config.host) } });
   }));
@@ -249,10 +248,17 @@ export async function createApp(options = {}) {
     store.state.profiles.push(profile); store.event(`Profil „${profile.name}“ angelegt.`); await store.save();
     res.status(201).json({ profile: publicProfile(profile) });
   }));
-  for (const action of ['activate', 'restart', 'stop', 'backup', 'update']) app.post(`/api/profiles/:id/${action}`, asyncRoute(async (req, res) => {
+  const profileActions = { activate: 'parallel', parallel: 'parallel', switch: 'activate', restart: 'restart', stop: 'stop', backup: 'backup', update: 'update' };
+  for (const [route, action] of Object.entries(profileActions)) app.post(`/api/profiles/:id/${route}`, asyncRoute(async (req, res) => {
     if ((await steamSetup.status()).active) return res.status(409).json({ error: 'Steam-Einrichtung läuft. Vor einer Serveraktion deren Abschluss abwarten oder die Einrichtung abbrechen.' });
-    if (['restart', 'update'].includes(action)) z.object({}).strict().parse(req.body ?? {});
-    res.status(202).json({ job: controller.begin(action, req.params.id, undefined, { requestId: req.requestId }) });
+    const body = req.body ?? {};
+    let sourceProfileId;
+    if (route === 'switch') {
+      ({ sourceProfileId } = z.object({ sourceProfileId: z.string().uuid() }).strict().parse(body));
+    } else if (['parallel', 'restart', 'update'].includes(action)) {
+      z.object({}).strict().parse(body);
+    }
+    res.status(202).json({ job: controller.begin(action, req.params.id, undefined, { requestId: req.requestId, sourceProfileId }) });
   }));
   app.post('/api/backups/:id/restore', asyncRoute(async (req, res) => {
     if ((await steamSetup.status()).active) return res.status(409).json({ error: 'Steam-Einrichtung läuft. Vor einer Wiederherstellung deren Abschluss abwarten oder die Einrichtung abbrechen.' });

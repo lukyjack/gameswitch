@@ -40,6 +40,7 @@ import {
   X,
   Zap,
 } from "lucide-react";
+import { profilesHavePortCollision } from "../server/game-ports.mjs";
 import "./styles.css";
 
 let csrfToken = "";
@@ -224,7 +225,19 @@ const date = (value) =>
         minute: "2-digit",
       }).format(new Date(value))
     : "–";
-const ram = (mb) => `${Number(mb || 0) / 1024} GB`;
+const ramFormat = new Intl.NumberFormat("de-DE", { maximumFractionDigits: 2 });
+const ram = (mb) => `${ramFormat.format(Number(mb || 0) / 1024)} GB`;
+const memoryLimit = (host) => Math.max(0, (host?.memoryMb ?? 16384) - (host?.reservedMemoryMb ?? 3072));
+const allocatedMemory = (profiles) => profiles.reduce((total, profile) => total + Number(profile.memoryMb || 0), 0);
+const runtimeReady = (game) => game?.available !== false && !game?.setupRequired;
+const conflictingProfiles = (target, profiles) => profiles.filter((profile) => {
+  try {
+    return profilesHavePortCollision(target, profile);
+  } catch (error) {
+    if (error.status !== 400) throw error;
+    return false;
+  }
+});
 const loaderName = (value) =>
   ({
     vanilla: "Vanilla",
@@ -318,13 +331,18 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState("");
   const [consoleProfile, setConsoleProfile] = useState(null);
-  const [consoleLines, setConsoleLines] = useState([]);
+  const [consoleFeed, setConsoleFeed] = useState({ lines: [], loading: true, error: "" });
   const [steamSetup, setSteamSetup] = useState(null);
   const mutationInFlight = useRef(false);
+  const consoleRefresh = useRef(null);
+  const refreshGeneration = useRef(0);
   const refresh = async () => {
+    const generation = ++refreshGeneration.current;
     try {
-      setState(await api("/state"));
+      const result = await api("/state");
+      if (generation === refreshGeneration.current) setState(result);
     } catch (e) {
+      if (generation !== refreshGeneration.current) return;
       if (e.status === 401) {
         csrfToken = "";
         setSession({ authenticated: false });
@@ -353,20 +371,29 @@ function App() {
     return () => clearTimeout(timer);
   }, [notice]);
   const profiles = state?.profiles || [];
-  const active =
-    profiles.find((p) => p.id === state?.activeProfileId) ||
-    profiles.find((p) => p.status === "running");
   const runningJob = state?.job?.status === "running";
+  const runningProfiles = profiles.filter((profile) =>
+    state?.runningProfileIds?.includes(profile.id) ?? profile.status === "running");
+  const unknownProfiles = profiles.filter((profile) => profile.status === "unknown");
+  const searchTerm = query.trim().toLowerCase();
+  const filteredProfiles = [...profiles]
+    .sort((a, b) => Number(b.status === "running") - Number(a.status === "running"))
+    .filter((profile) => `${profile.name} ${gameName(profile.gameId)} ${profile.loader}`
+      .toLowerCase().includes(searchTerm));
   const sandbox = (state?.mode || session?.mode) === "sandbox";
-  const mutate = async (path, success) => {
+  const openAction = (type, profile) => {
+    setError("");
+    setModal({ type, profile });
+  };
+  const mutate = async (path, body = {}) => {
     if (mutationInFlight.current || runningJob) return;
     mutationInFlight.current = true;
     setBusy(true);
     setError("");
     try {
-      await api(path, { method: "POST", body: {} });
+      const { job } = await api(path, { method: "POST", body });
+      if (job) setState((current) => ({ ...current, job }));
       setModal(null);
-      if (success) setNotice(success);
       await refresh();
     } catch (e) {
       if (e.status === 401) {
@@ -385,46 +412,48 @@ function App() {
       busy ||
       runningJob ||
       profile.status !== "running" ||
-      profileCapabilities(profile, state).available === false ||
-      profileCapabilities(profile, state).setupRequired
+      !runtimeReady(profileCapabilities(profile, state))
     )
       return;
-    setError("");
-    setModal({ type: "restart", profile });
+    openAction("restart", profile);
   };
-  const showConsole = async (profile) => {
+  const showConsole = (profile) => {
+    setConsoleFeed({ lines: [], loading: true, error: "" });
     setConsoleProfile(profile);
-    setConsoleLines([]);
-    try {
-      const result = await api(
-        `/profiles/${encodeURIComponent(profile.id)}/console`,
-      );
-      setConsoleLines(result.lines || []);
-    } catch (e) {
-      if (e.status === 401) {
-        csrfToken = "";
-        setConsoleProfile(null);
-        setSession({ authenticated: false });
-      } else setError(e.message);
-    }
   };
+  const consoleProfileId = consoleProfile?.id;
   useEffect(() => {
-    if (!consoleProfile) return;
-    const timer = setInterval(
-      () =>
-        api(`/profiles/${encodeURIComponent(consoleProfile.id)}/console`)
-          .then((d) => setConsoleLines(d.lines || []))
-          .catch((e) => {
-            if (e.status === 401) {
-              csrfToken = "";
-              setConsoleProfile(null);
-              setSession({ authenticated: false });
-            }
-          }),
-      4000,
-    );
-    return () => clearInterval(timer);
-  }, [consoleProfile?.id]);
+    if (!consoleProfileId || !session?.authenticated) return;
+    const controller = new AbortController();
+    let loading = false;
+    const load = async () => {
+      if (loading) return;
+      loading = true;
+      try {
+        const result = await api(`/profiles/${encodeURIComponent(consoleProfileId)}/console`, {
+          signal: controller.signal,
+        });
+        if (!controller.signal.aborted) setConsoleFeed({ lines: result.lines || [], loading: false, error: "" });
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        if (error.status === 401) {
+          csrfToken = "";
+          setConsoleProfile(null);
+          setSession({ authenticated: false });
+        } else setConsoleFeed((feed) => ({ ...feed, loading: false, error: error.message }));
+      } finally {
+        loading = false;
+      }
+    };
+    consoleRefresh.current = { profileId: consoleProfileId, load };
+    load();
+    const timer = setInterval(load, 4000);
+    return () => {
+      controller.abort();
+      clearInterval(timer);
+      consoleRefresh.current = null;
+    };
+  }, [consoleProfileId, session?.authenticated]);
 
   if (!session)
     return (
@@ -501,10 +530,7 @@ function App() {
           <div className="sidebar-note">
             <ShieldCheck size={21} />
             <strong>Deine Welten bleiben.</strong>
-            <p>
-              Eigene Spielstände für jedes Profil. Sicher wechseln, später
-              weiterspielen.
-            </p>
+            <p>Eigene Spielstände und Sicherungen für jedes Profil.</p>
           </div>
           <button
             className="user-button"
@@ -514,6 +540,10 @@ function App() {
               try {
                 await api("/logout", { method: "POST", body: {} });
                 csrfToken = "";
+                refreshGeneration.current++;
+                setModal(null);
+                setConsoleProfile(null);
+                setSteamSetup(null);
                 setSession({ authenticated: false, mode: session.mode });
                 setState(null);
               } catch (e) {
@@ -596,18 +626,14 @@ function App() {
           )}
           <div className="page-heading">
             <div>
-              <div className="eyebrow">
-                <span />
-                DEIN GAME SERVER HUB
-              </div>
               <h1>
                 {
                   {
-                    overview: "Deine nächste Session beginnt hier.",
-                    profiles: "Ein Server. Viele Möglichkeiten.",
-                    backups: "Fortschritt, der bleibt.",
-                    activity: "Alles im Blick.",
-                    security: "Sicherheit ist eingebaut.",
+                    overview: "Serverübersicht",
+                    profiles: "Spielprofile",
+                    backups: "Backups",
+                    activity: "Aktivität",
+                    security: "Sicherheit & System",
                   }[tab]
                 }
               </h1>
@@ -615,7 +641,7 @@ function App() {
                 {
                   {
                     overview:
-                      "Spiele wechseln. Welten behalten. Alles an einem Ort.",
+                      "Alle Spielserver und ihr gemeinsames Ressourcenbudget im Blick.",
                     profiles:
                       "Verwalte deine Spiele, Versionen und Modpacks als eigene Profile.",
                     backups:
@@ -664,166 +690,23 @@ function App() {
                 <>
                   {tab === "overview" && (
                     <div className="dashboard-grid">
-                      <section className="active-panel panel">
-                        <div className="section-top">
-                          <span className="section-kicker">
-                            <Radio size={15} />
-                            AKTIVE SESSION
-                          </span>
-                          <span
-                            className={`live-label ${active?.status === "running" ? "" : "inactive"}`}
-                          >
-                            <span className="status-dot" />
-                            {active?.status === "running"
-                              ? sandbox
-                                ? "Simuliert aktiv"
-                                : "Online"
-                              : "Bereit zum Starten"}
-                          </span>
-                        </div>
-                        <div className="active-content">
-                          <div
-                            className={`active-icon ${active && !isMinecraft(active) ? "blue" : ""} ${active?.gameId === "factorio" ? "active-icon-factorio" : ""}`}
-                          >
-                            {active && !isMinecraft(active) ? (
-                              <span className="active-game-letter">
-                                {gameLetter(active.gameId)}
-                              </span>
-                            ) : (
-                              <Box size={35} strokeWidth={1.5} />
-                            )}
-                          </div>
-                          <div>
-                            <span className="subtle-tag">
-                              {active
-                                ? gameName(active.gameId)
-                                : "DEIN PLATZ FÜR DIE NÄCHSTE SESSION"}
-                            </span>
-                            <h2>
-                              {active?.name || "Welches Spiel wird’s heute?"}
-                            </h2>
-                            <p>
-                              {active
-                                ? `${loaderName(active.loader)} · ${active.version || "Steam"} · ${ram(active.memoryMb)} RAM`
-                                : "Erstelle ein Spielprofil und lade deine Freunde ein."}
-                            </p>
-                          </div>
-                        </div>
-                        <div className="active-footer">
-                          {active ? (
-                            <>
-                              <div className="connection">
-                                <span>SERVERPORT</span>
-                                <strong>
-                                  {active.port}{" "}
-                                  <span>· {active.maxPlayers} Slots</span>
-                                </strong>
-                              </div>
-                              <button
-                                className="button subtle"
-                                onClick={() => showConsole(active)}
-                              >
-                                <Terminal size={16} />
-                                Konsole
-                              </button>
-                              <button
-                                className="button subtle"
-                                disabled={
-                                  busy ||
-                                  runningJob ||
-                                  profileCapabilities(active, state)
-                                    .available === false ||
-                                  profileCapabilities(active, state).setupRequired ||
-                                  active.status !== "running"
-                                }
-                                onClick={() => requestRestart(active)}
-                              >
-                                <RefreshCw size={15} />
-                                Neu starten
-                              </button>
-                              <button
-                                className="button danger-outline"
-                                disabled={busy || runningJob}
-                                onClick={() =>
-                                  setModal({ type: "stop", profile: active })
-                                }
-                              >
-                                <Square size={13} fill="currentColor" />
-                                Stoppen
-                              </button>
-                            </>
-                          ) : (
-                            <>
-                              <span className="saved-note">
-                                <ShieldCheck size={16} />
-                                Getrennte Welten. Automatische Backups beim
-                                Wechsel.
-                              </span>
-                              <button
-                                className="button subtle"
-                                disabled={runningJob}
-                                onClick={() => setModal({ type: "create" })}
-                              >
-                                Profil erstellen <ArrowRight size={16} />
-                              </button>
-                            </>
-                          )}
-                        </div>
-                        <div className="active-glow" />
-                      </section>
-                      <section className="node-panel panel">
-                        <div className="section-top">
-                          <span className="section-kicker">
-                            <Server size={15} />
-                            DEIN NODE
-                          </span>
-                          <span className="node-provider">NETCUP VPS</span>
-                        </div>
-                        <h3>{state.host?.name || "GameSwitch Node"}</h3>
-                        <p className="node-note">
-                          {sandbox
-                            ? "Geplante VPS-Konfiguration"
-                            : "Konfiguriertes Ressourcenbudget"}
-                        </p>
-                        <div className="hardware-row">
-                          <span>
-                            <Cpu size={17} />
-                            CPU-Kerne
-                          </span>
-                          <strong>{state.host?.cpuCores || 8} vCPU</strong>
-                        </div>
-                        <div className="hardware-row">
-                          <span>
-                            <MemoryStick size={17} />
-                            Arbeitsspeicher
-                          </span>
-                          <strong>{ram(state.host?.memoryMb || 16384)}</strong>
-                        </div>
-                        <div className="budget">
-                          <div>
-                            <span>Für Spielprofile verfügbar</span>
-                            <strong>
-                              {ram(
-                                (state.host?.memoryMb || 16384) -
-                                  (state.host?.reservedMemoryMb || 3072),
-                              )}
-                            </strong>
-                          </div>
-                          <div className="budget-bar">
-                            <span />
-                          </div>
-                          <p>
-                            {ram(state.host?.reservedMemoryMb || 3072)} Reserve
-                            für System & Panel
-                          </p>
-                        </div>
-                      </section>
+                      <RunningServers
+                        profiles={runningProfiles}
+                        unknownCount={unknownProfiles.length}
+                        state={state}
+                        sandbox={sandbox}
+                        disabled={busy || runningJob}
+                        onConsole={showConsole}
+                        onRestart={requestRestart}
+                        onStop={(profile) => openAction("stop", profile)}
+                      />
+                      <HostBudget host={state.host} profiles={runningProfiles} unknownCount={unknownProfiles.length} />
                     </div>
                   )}
                   {state.job && (
                     <JobProgress job={state.job} profiles={profiles} />
                   )}
-                  <section className="profiles-section">
+                  <section className="profiles-section" id="spielprofile">
                     <div className="section-title">
                       <div>
                         <h2>
@@ -831,10 +714,10 @@ function App() {
                           <span className="count-badge">{profiles.length}</span>
                         </h2>
                         <p>
-                          Ein Klick zum Wechseln. Dein Fortschritt zieht mit.
+                          Starte und verwalte mehrere Spielserver unabhängig voneinander.
                         </p>
                       </div>
-                      <label className="search-box">
+                      <div className="search-box">
                         <Search size={16} />
                         <input
                           aria-label="Spielprofile durchsuchen"
@@ -842,71 +725,49 @@ function App() {
                           value={query}
                           onChange={(e) => setQuery(e.target.value)}
                         />
-                        <kbd>⌕</kbd>
-                      </label>
+                        {query && (
+                          <button type="button" className="icon-button" aria-label="Suche leeren" onClick={() => setQuery("")}>
+                            <X size={15} />
+                          </button>
+                        )}
+                      </div>
                     </div>
                     <div className="profiles-grid">
-                      {profiles
-                        .filter((p) =>
-                          `${p.name} ${gameName(p.gameId)} ${p.loader}`
-                            .toLowerCase()
-                            .includes(query.toLowerCase()),
-                        )
-                        .map((profile) => (
-                          <ProfileCard
-                            key={profile.id}
-                            profile={profile}
-                            active={
-                              active?.id === profile.id &&
-                              profile.status === "running"
-                            }
-                            sandbox={sandbox}
-                            game={profileCapabilities(profile, state)}
-                            disabled={busy || runningJob}
-                            onActivate={() =>
-                              setModal({ type: "activate", profile })
-                            }
-                            onConsole={() => showConsole(profile)}
-                            onRestart={() => requestRestart(profile)}
-                            onBackup={() =>
-                              setModal({ type: "backup", profile })
-                            }
-                            onUpdate={() => {
-                              setError("");
-                              setModal({ type: "update", profile });
-                            }}
-                            onSteamSetup={() => setSteamSetup({ gameId: profile.gameId, workshopIds: libraryMods(profile.gameId, profiles, profile.workshopIds || []) })}
-                          />
-                        ))}
-                      <button
-                        className="add-profile-card"
-                        onClick={() => setModal({ type: "create" })}
-                        disabled={runningJob}
-                      >
-                        <span className="add-icon">
-                          <Plus size={23} />
-                        </span>
-                        <strong>Dein nächstes Abenteuer</strong>
-                        <span>
-                          Minecraft, Garry’s Mod und mehr.
-                          <br />
-                          Starte mit einem neuen Spielprofil.
-                        </span>
-                        <span className="add-link">
-                          Spielprofil hinzufügen <ArrowRight size={15} />
-                        </span>
-                      </button>
-                    </div>
-                    {query &&
-                      !profiles.some((p) =>
-                        `${p.name} ${gameName(p.gameId)} ${p.loader}`
-                          .toLowerCase()
-                          .includes(query.toLowerCase()),
-                      ) && (
-                        <p className="no-results">
-                          Keine passenden Profile gefunden.
-                        </p>
+                      {filteredProfiles.map((profile) => (
+                        <ProfileCard
+                          key={profile.id}
+                          profile={profile}
+                          active={profile.status === "running"}
+                          sandbox={sandbox}
+                          game={profileCapabilities(profile, state)}
+                          disabled={busy || runningJob}
+                          job={runningJob && state.job.profileId === profile.id ? state.job : null}
+                          backupPending={state.pendingSafetyBackupProfileIds?.includes(profile.id)}
+                          onStart={() => openAction("parallel", profile)}
+                          onConsole={() => showConsole(profile)}
+                          onRestart={() => requestRestart(profile)}
+                          onStop={() => openAction("stop", profile)}
+                          onBackup={() => openAction("backup", profile)}
+                          onUpdate={() => openAction("update", profile)}
+                          onSteamSetup={() => setSteamSetup({ gameId: profile.gameId, workshopIds: libraryMods(profile.gameId, profiles, profile.workshopIds || []) })}
+                        />
+                      ))}
+                      {!searchTerm && (
+                        <button
+                          className="add-profile-card"
+                          onClick={() => setModal({ type: "create" })}
+                          disabled={busy || runningJob}
+                        >
+                          <span className="add-icon">
+                            <Plus size={23} />
+                          </span>
+                          <strong>Spielprofil hinzufügen</strong>
+                        </button>
                       )}
+                    </div>
+                    {searchTerm && !filteredProfiles.length && (
+                      <p className="no-results" role="status">Keine passenden Profile gefunden.</p>
+                    )}
                   </section>
                   {tab === "overview" && (
                     <div className="bottom-grid">
@@ -978,7 +839,10 @@ function App() {
                 <Backups
                   state={state}
                   busy={busy || runningJob}
-                  onRestore={(backup) => setModal({ type: "restore", backup })}
+                onRestore={(backup) => {
+                  setError("");
+                  setModal({ type: "restore", backup });
+                }}
                   onNew={() => setTab("profiles")}
                 />
               )}
@@ -1042,7 +906,10 @@ function App() {
         <ConfirmModal
           modal={modal}
           profiles={profiles}
-          active={active}
+          runningProfiles={runningProfiles}
+          unknownProfiles={unknownProfiles}
+          pendingBackups={state?.pendingSafetyBackupProfileIds || []}
+          host={state?.host}
           sandbox={sandbox}
           busy={busy}
           runningJob={runningJob}
@@ -1050,13 +917,14 @@ function App() {
           runtimeSetup={state?.runtimeSetup}
           error={error}
           onClose={() => setModal(null)}
-          onConfirm={() =>
+          onConfirm={(options) =>
             modal.type === "restore"
               ? mutate(
                   `/backups/${encodeURIComponent(modal.backup.id)}/restore`,
                 )
               : mutate(
-                  `/profiles/${encodeURIComponent(modal.profile.id)}/${modal.type}`,
+                  `/profiles/${encodeURIComponent(modal.profile.id)}/${options?.sourceProfileId ? "switch" : modal.type}`,
+                  options,
                 )
           }
         />
@@ -1074,16 +942,24 @@ function App() {
               {sandbox ? "Sandbox-Protokoll" : "Serverausgabe"}
             </span>
             <span>
-              {gameCapabilities(consoleProfile.gameId, state.catalog)
+              {gameCapabilities(consoleProfile.gameId, state?.catalog)
                 .consoleInput
                 ? `${gameName(consoleProfile.gameId)}-Konsole`
                 : "Nur Lesezugriff"}
             </span>
           </div>
-          <pre className="console-output">
-            {consoleLines.length
-              ? consoleLines.join("\n")
-              : "Noch keine Konsolenausgabe vorhanden."}
+          {consoleFeed.error && (
+            <div className="console-feed-error alert alert-error" role="alert">
+              <TriangleAlert size={16} />
+              <span>{consoleFeed.error}</span>
+            </div>
+          )}
+          <pre className="console-output" aria-busy={consoleFeed.loading}>
+            {consoleFeed.loading
+              ? "Konsolenausgabe wird geladen …"
+              : consoleFeed.lines.length
+                ? consoleFeed.lines.join("\n")
+                : "Keine Konsolenausgabe vorhanden."}
           </pre>
           {
             <ConsoleInput
@@ -1093,21 +969,11 @@ function App() {
                 consoleProfile
               }
               sandbox={sandbox}
-              game={gameCapabilities(consoleProfile.gameId, state.catalog)}
-              locked={runningJob}
-              onSent={async () => {
-                try {
-                  const result = await api(
-                    `/profiles/${encodeURIComponent(consoleProfile.id)}/console`,
-                  );
-                  setConsoleLines(result.lines || []);
-                } catch (e) {
-                  if (e.status === 401) {
-                    csrfToken = "";
-                    setConsoleProfile(null);
-                    setSession({ authenticated: false });
-                  }
-                }
+              game={gameCapabilities(consoleProfile.gameId, state?.catalog)}
+              locked={busy || runningJob}
+              onSent={() => {
+                const feed = consoleRefresh.current;
+                if (feed?.profileId === consoleProfile.id) return feed.load();
               }}
               onUnauthorized={() => {
                 csrfToken = "";
@@ -1870,7 +1736,7 @@ function Auth({ session, onAuthenticated }) {
           </div>
           <div className="auth-promise">
             <ShieldCheck size={20} />
-            <span>Sicher wechseln. Spielstände behalten.</span>
+            <span>Spielserver parallel betreiben. Welten getrennt sichern.</span>
           </div>
         </div>
         <span className="auth-credit">
@@ -1964,15 +1830,131 @@ function Auth({ session, onAuthenticated }) {
   );
 }
 
+function RunningServers({ profiles, unknownCount, state, sandbox, disabled, onConsole, onRestart, onStop }) {
+  return (
+    <section className="running-panel panel" aria-labelledby="running-servers-title">
+      <div className="section-top">
+        <h2 id="running-servers-title"><Radio size={18} /> Laufende Spielserver</h2>
+        <span className={`server-count ${profiles.length ? "has-servers" : ""}`}>
+          <span className="status-dot" /> {profiles.length} {sandbox ? "simuliert" : "aktiv"}
+        </span>
+      </div>
+      {profiles.length ? (
+        <ul className="running-list">
+          {profiles.map((profile) => (
+            <li className="running-server" key={profile.id}>
+              <div className="running-identity">
+                <GameBadge game={profile.gameId} size={23} />
+                <div>
+                  <h3>{profile.name}</h3>
+                  <p>{gameName(profile.gameId)} · Port {profile.port} · {ram(profile.memoryMb)} RAM</p>
+                </div>
+              </div>
+              <RunningActions
+                profile={profile}
+                game={profileCapabilities(profile, state)}
+                disabled={disabled}
+                onConsole={() => onConsole(profile)}
+                onRestart={() => onRestart(profile)}
+                onStop={() => onStop(profile)}
+              />
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <div className="running-empty">
+          <Server size={25} />
+          <p>{unknownCount ? "Kein laufender Server bestätigt." : "Derzeit läuft kein Spielserver."}</p>
+          <a href="#spielprofile" className="button subtle">Zu den Spielprofilen <ArrowRight size={15} /></a>
+        </div>
+      )}
+      {unknownCount > 0 && (
+        <p className="running-unknown">
+          <TriangleAlert size={15} /> Status ungeklärt bei {unknownCount} {unknownCount === 1 ? "Profil" : "Profilen"}.
+        </p>
+      )}
+    </section>
+  );
+}
+
+function RunningActions({ profile, game, disabled, onConsole, onRestart, onStop }) {
+  return (
+    <div className="running-actions" role="group" aria-label={`Aktionen für ${profile.name}`}>
+      <button className="button subtle" onClick={onConsole} aria-label={`Konsole für ${profile.name} öffnen`}>
+        <Terminal size={15} /> Konsole
+      </button>
+      <button className="button subtle" disabled={disabled || !runtimeReady(game)} onClick={onRestart} aria-label={`${profile.name} neu starten`}>
+        <RefreshCw size={15} /> Neu starten
+      </button>
+      <button className="button danger-outline" disabled={disabled} onClick={onStop} aria-label={`${profile.name} stoppen`}>
+        <Square size={14} /> Stoppen
+      </button>
+    </div>
+  );
+}
+
+function HostBudget({ host, profiles, unknownCount }) {
+  const used = allocatedMemory(profiles);
+  const limit = memoryLimit(host);
+  const available = Math.max(0, limit - used);
+  return (
+    <section className="node-panel panel" aria-labelledby="host-budget-title">
+      <h2 id="host-budget-title"><Server size={18} /> Ressourcenbudget</h2>
+      <p className="node-note">{host?.name || "GameSwitch Node"}</p>
+      <div className="hardware-row">
+        <span><Cpu size={17} /> CPU-Kerne</span>
+        <strong>{host?.cpuCores ?? 8} vCPU</strong>
+      </div>
+      <div className="hardware-row">
+        <span><MemoryStick size={17} /> RAM des Hosts</span>
+        <strong>{ram(host?.memoryMb ?? 16384)}</strong>
+      </div>
+      <div className={`budget ${used > limit ? "over-budget" : ""}`}>
+        <div>
+          <span>RAM-Limits laufender Profile</span>
+          <strong>{ram(used)} / {ram(limit)}</strong>
+        </div>
+        <meter className="budget-bar" min={0} max={limit || 1} value={Math.min(used, limit)} aria-label="Belegtes RAM-Budget der laufenden Profile" aria-valuetext={`${ram(used)} von ${ram(limit)}`} />
+        <p>
+          {used > limit ? `${ram(used - limit)} über dem Budget` : `${ram(available)} frei`} · {ram(host?.reservedMemoryMb ?? 3072)} Systemreserve
+        </p>
+        {unknownCount > 0 && <p>Profile mit unklarem Status fehlen in der Berechnung.</p>}
+      </div>
+    </section>
+  );
+}
+
+const jobStatusLabels = {
+  parallel: "Startet",
+  activate: "Wechselt",
+  restart: "Startet neu",
+  stop: "Stoppt und sichert",
+  update: "Aktualisiert",
+  backup: "Sichert",
+  restore: "Stellt wieder her",
+};
+const jobProgressLabels = {
+  parallel: ["Server startet", "Serverprozess gestartet"],
+  activate: ["Profilwechsel läuft", "Spielprofil gewechselt"],
+  restart: ["Server startet neu", "Serverprozess neu gestartet"],
+  stop: ["Server wird gestoppt und gesichert", "Server gestoppt und gesichert"],
+  update: ["Server und Mods werden aktualisiert", "Server und Mods aktualisiert"],
+  backup: ["Backup wird erstellt", "Backup erstellt"],
+  restore: ["Spielstand wird wiederhergestellt", "Spielstand wiederhergestellt"],
+};
+
 function ProfileCard({
   profile,
   game,
   active,
   sandbox,
   disabled,
-  onActivate,
+  job,
+  backupPending,
+  onStart,
   onConsole,
   onRestart,
+  onStop,
   onBackup,
   onUpdate,
   onSteamSetup,
@@ -1982,17 +1964,17 @@ function ProfileCard({
     <article className={`profile-card panel ${active ? "active-card" : ""}`}>
       <div className="profile-art-wrapper">
         <GameArt game={profile.gameId} />
-        <span className={`profile-status ${active ? "is-active" : ""}`}>
-          <span className="status-dot" />
-          {active
-            ? sandbox
-              ? "Simuliert aktiv"
-              : "Aktiv"
-            : profile.status === "unknown"
-              ? "Status unbekannt"
-              : game?.setupRequired
-                ? "Steam-Einrichtung"
-                : "Pausiert"}
+        <span className={`profile-status ${job ? "is-working" : active ? "is-active" : profile.status === "unknown" ? "is-unknown" : ""}`}>
+          {job ? <LoaderCircle className="spin" size={12} /> : <span className="status-dot" />}
+          {job
+            ? jobStatusLabels[job.type] || "In Arbeit"
+            : active
+              ? sandbox ? "Simuliert aktiv" : "Läuft"
+              : profile.status === "unknown"
+                ? "Status unbekannt"
+                : game?.setupRequired
+                  ? "Steam-Einrichtung offen"
+                  : profile.installed ? "Gestoppt" : "Bereit zur Installation"}
         </span>
       </div>
       <div className="profile-details">
@@ -2035,63 +2017,43 @@ function ProfileCard({
             <Server size={14} />:{profile.port}
           </span>
         </div>
-        <div className="profile-actions profile-actions-running">
-          <button
-            className={`button ${active ? "subtle" : "primary-soft"}`}
-            disabled={
-              disabled ||
-              profile.status === "unknown" ||
-              game?.available === false ||
-              (!active && game?.setupRequired)
-            }
-            title={game?.unavailableReason || (game?.setupRequired ? game.setupReason : undefined)}
-            onClick={active ? onConsole : onActivate}
-          >
-            {active ? <Terminal size={15} /> : <Power size={15} />}
-            {active ? "Konsole öffnen" : game?.setupRequired ? "Einrichtung erforderlich" : "Profil starten"}
-            {!active && <ArrowRight size={15} />}
-          </button>
-          <button
-            className="icon-button"
-            title={
-              active
-                ? "Für ein manuelles Backup zuerst stoppen"
-                : "Backup erstellen"
-            }
-            aria-label={`Backup für ${profile.name} erstellen`}
-            disabled={disabled || active || profile.status === "unknown"}
-            onClick={onBackup}
-          >
-            <Database size={17} />
-          </button>
-          {active && (
+        {active ? (
+          <RunningActions profile={profile} game={game} disabled={disabled} onConsole={onConsole} onRestart={onRestart} onStop={onStop} />
+        ) : (
+          <div className="profile-actions">
             <button
-              className="button subtle profile-restart"
-              disabled={
-                disabled ||
-                profile.status !== "running" ||
-                game?.available === false ||
-                game?.setupRequired
-              }
-              onClick={onRestart}
-              aria-label={`${profile.name} neu starten`}
+              className="button primary-soft"
+              disabled={disabled || profile.status !== "stopped" || !runtimeReady(game)}
+              title={game?.unavailableReason || (game?.setupRequired ? game.setupReason : undefined)}
+              aria-label={`${profile.name} starten`}
+              onClick={onStart}
             >
-              <RefreshCw size={15} />
-              Neu starten
+              <Power size={15} /> Starten <ArrowRight size={15} />
             </button>
-          )}
-          {!active && (
+            <button
+              className="icon-button"
+              title={profile.installed ? "Backup erstellen" : "Backup nach der ersten Installation verfügbar"}
+              aria-label={`Backup für ${profile.name} erstellen`}
+              disabled={disabled || !profile.installed || profile.status !== "stopped"}
+              onClick={onBackup}
+            >
+              <Database size={17} />
+            </button>
             <button
               className="button subtle profile-console"
-              disabled={disabled}
               onClick={onConsole}
               aria-label={`Konsole und Administration für ${profile.name} öffnen`}
             >
               <Terminal size={15} />
               Konsole &amp; Admin
             </button>
-          )}
-        </div>
+          </div>
+        )}
+        {backupPending && !job && (
+          <p className="profile-backup-pending">
+            <TriangleAlert size={15} /> Eine Sicherheitskopie steht aus.
+          </p>
+        )}
         {game?.available === false && (
           <p className="console-help">{game.unavailableReason}</p>
         )}
@@ -2129,10 +2091,12 @@ function ProfileCard({
 
 function JobProgress({ job, profiles }) {
   const profile = profiles.find((p) => p.id === job.profileId);
+  const [running, completed] = jobProgressLabels[job.type] || ["Vorgang läuft", "Vorgang abgeschlossen"];
+  const activeStep = job.steps?.find((step) => step.status === "running");
   return (
     <section
       className={`panel job-panel ${job.status === "failed" ? "job-failed" : ""}`}
-      aria-live="polite"
+      aria-label="Letzter Servervorgang"
     >
       <div className="job-heading">
         <span
@@ -2146,35 +2110,23 @@ function JobProgress({ job, profiles }) {
             <CheckCheck size={19} />
           )}
         </span>
-        <div>
+        <div aria-live="polite">
           <h3>
             {job.status === "running"
-              ? job.type === "restart"
-                ? "Neustart läuft."
-                : job.type === "update"
-                  ? "Server und Mods werden aktualisiert."
-                  : "Dein Server macht sich bereit."
+              ? running
               : job.status === "failed"
-                ? "Vorgang sicher angehalten."
-                : job.type === "restart"
-                  ? "Serverprozess neu gestartet."
-                  : job.type === "update"
-                    ? "Server und Mods aktualisiert."
-                    : job.type === "activate"
-                    ? "Serverprozess gestartet."
-                    : "Vorgang abgeschlossen."}
+                ? "Vorgang fehlgeschlagen"
+                : completed}
           </h3>
           <p>
             {profile?.name || "Servervorgang"}
             {job.status === "failed"
               ? ` · ${job.error || "Bitte das Protokoll prüfen."}`
               : job.status === "completed"
-                ? ["restart", "activate"].includes(job.type)
+                ? ["restart", "activate", "parallel"].includes(job.type)
                   ? " · Die Welt kann noch laden; die Konsole zeigt den Fortschritt."
-                  : job.type === "update"
-                    ? " · Welt, Profile und Serverkonfiguration blieben erhalten; vorher wurde ein Backup erstellt."
-                    : " · Vorgang abgeschlossen"
-                : " · Du kannst den Fortschritt hier verfolgen."}
+                  : ""
+                : activeStep ? ` · ${activeStep.label}` : ""}
           </p>
         </div>
         <span className="tag">
@@ -2187,7 +2139,7 @@ function JobProgress({ job, profiles }) {
       </div>
       <div className="job-steps">
         {(job.steps || []).map((step, i) => (
-          <div key={i} className={`job-step ${step.status}`}>
+          <div key={i} className={`job-step ${step.status}`} aria-current={step.status === "running" ? "step" : undefined}>
             <span>
               {step.status === "completed" ? (
                 <Check size={13} />
@@ -2245,11 +2197,9 @@ function Backups({ state, busy, onRestore, onNew }) {
       <div className="backup-info">
         <ShieldCheck size={22} />
         <div>
-          <strong>Ein sicherer Wechsel beginnt mit einem Backup.</strong>
+          <strong>Backups für jedes Spielprofil</strong>
           <p>
-            Beim Profilwechsel wird die alte Instanz sauber beendet und
-            gesichert. Eine Wiederherstellung ist nur bei gestopptem Profil
-            möglich.
+            GameSwitch sichert Spielstände beim Stoppen, beim Neustart und beim Profilwechsel. Eine Wiederherstellung setzt ein gestopptes Profil voraus.
           </p>
         </div>
       </div>
@@ -2264,11 +2214,9 @@ function Backups({ state, busy, onRestore, onNew }) {
         {!backups.length ? (
           <div className="empty-state">
             <Database size={35} />
-            <h3>Noch alles ganz frisch.</h3>
+            <h3>Noch keine Backups vorhanden</h3>
             <p>
-              Nach deinem ersten Profilwechsel erscheint hier das Backup.
-              <br />
-              Manuelle Sicherungen erstellst du am gestoppten Spielprofil.
+              Eine manuelle Sicherung erstellst du am gestoppten Spielprofil.
             </p>
             <button className="button subtle" onClick={onNew}>
               Zu den Spielprofilen <ArrowRight size={16} />
@@ -2493,7 +2441,11 @@ function Security({ state, sandbox, onSteamSetup }) {
 
 function Modal({ title, subtitle, children, onClose, wide = false }) {
   const ref = useRef(null);
+  const onCloseRef = useRef(onClose);
   const titleId = React.useId();
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
   useEffect(() => {
     const previous = document.activeElement;
     const focusable = () =>
@@ -2504,7 +2456,7 @@ function Modal({ title, subtitle, children, onClose, wide = false }) {
     const keydown = (event) => {
       const visibleDialogs = [...document.querySelectorAll('[role="dialog"]')].filter(dialog => !dialog.closest('[hidden]'));
       if (visibleDialogs.at(-1) !== ref.current) return;
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") onCloseRef.current();
       if (event.key === "Tab") {
         const list = focusable();
         if (!list?.length) return;
@@ -2565,7 +2517,10 @@ function Modal({ title, subtitle, children, onClose, wide = false }) {
 function ConfirmModal({
   modal,
   profiles,
-  active,
+  runningProfiles,
+  unknownProfiles,
+  pendingBackups,
+  host,
   sandbox,
   busy,
   runningJob,
@@ -2576,23 +2531,38 @@ function ConfirmModal({
   onConfirm,
 }) {
   const type = modal.type;
+  const [sourceProfileId, setSourceProfileId] = useState("");
   const restore = type === "restore";
   const restart = type === "restart";
   const update = type === "update";
-  const target = restore
-    ? profiles.find((p) => p.id === modal.backup.profileId)
-    : modal.profile;
-  const switchProfile =
-    type === "activate" && active && active.id !== target?.id;
-  const restartUnavailable =
-    restart &&
-    profiles.find((profile) => profile.id === target?.id)?.status !== "running";
+  const starting = type === "parallel";
+  const usesResources = starting || restart || update;
+  const target = profiles.find((profile) => profile.id === (restore ? modal.backup.profileId : modal.profile?.id));
+  const switchSource = runningProfiles.length === 1 && !unknownProfiles.length && runningProfiles[0].id !== target?.id
+    ? runningProfiles[0]
+    : null;
+  const switching = starting && Boolean(sourceProfileId);
+  const source = switching ? profiles.find((profile) => profile.id === sourceProfileId) : null;
+  const remainingProfiles = runningProfiles.filter((profile) => profile.id !== sourceProfileId && profile.id !== target?.id);
+  const conflicts = usesResources && target ? conflictingProfiles(target, remainingProfiles) : [];
+  const limit = memoryLimit(host);
+  const projected = allocatedMemory(remainingProfiles) + Number(target?.memoryMb || 0);
   const targetSetup = target
     ? profileCapabilities(target, { catalog, runtimeSetup, mode: sandbox ? "sandbox" : "pufferpanel" })
     : null;
-  const setupUnavailable = ["activate", "restart", "update"].includes(type) && targetSetup?.setupRequired;
-  const updateRunning = update && profiles.find((profile) => profile.id === target?.id)?.status === "running";
-  const confirmDisabled = busy || runningJob || restartUnavailable || setupUnavailable;
+  const setupUnavailable = usesResources && !runtimeReady(targetSetup);
+  const updateRunning = update && target?.status === "running";
+  const issue = !target ? "Dieses Spielprofil ist nicht mehr verfügbar."
+    : target.status === "unknown" ? "Der Status dieses Spielprofils ist unklar."
+    : usesResources && unknownProfiles.length ? "Der Serverstatus ist unklar. Warte, bis alle Profile wieder erreichbar sind."
+    : setupUnavailable ? targetSetup.setupReason || targetSetup.unavailableReason
+    : (restart || type === "stop") && target.status !== "running" ? "Dieses Profil läuft gerade nicht."
+    : (starting || restore || type === "backup") && target.status !== "stopped" ? "Dieses Profil muss zuerst gestoppt werden."
+    : switching && switchSource?.id !== sourceProfileId ? "Der laufende Server hat sich geändert. Wähle den Startmodus erneut."
+    : conflicts.length ? `Belegte Ports durch ${conflicts.map((profile) => profile.name).join(", ")}.`
+    : usesResources && projected > limit ? `Das RAM-Budget würde um ${ram(projected - limit)} überschritten.`
+    : "";
+  const confirmDisabled = busy || runningJob || Boolean(issue);
   const title = restore
     ? "Spielstand wiederherstellen?"
     : update
@@ -2600,12 +2570,10 @@ function ConfirmModal({
       : restart
       ? "Server neu starten?"
       : type === "stop"
-        ? "Session beenden?"
+        ? "Server stoppen und sichern?"
         : type === "backup"
           ? "Spielstand sichern?"
-          : switchProfile
-            ? "Bereit für den Spielewechsel?"
-            : "Deine Session starten?";
+          : switching ? "Spielprofil wechseln?" : "Server starten?";
   return (
     <Modal
       title={title}
@@ -2619,27 +2587,13 @@ function ConfirmModal({
             <span>{error}</span>
           </div>
         )}
-        {setupUnavailable && (
-          <div className="inline-note" role="status">
-            <LockKeyhole size={17} />
-            <span>{targetSetup.setupReason} Die Steam-Einrichtung muss zuerst auf dem Host abgeschlossen werden.</span>
+        {!starting && (
+          <div className={`confirm-symbol ${type === "stop" || restart || update ? "amber" : ""}`}>
+            {type === "backup" ? <Database size={29} />
+              : type === "stop" ? <Power size={29} />
+              : <RefreshCw size={29} />}
           </div>
         )}
-        <div
-          className={`confirm-symbol ${type === "stop" || restart || update ? "amber" : ""}`}
-        >
-          {restore || update ? (
-            <RefreshCw size={29} />
-          ) : restart ? (
-            <RefreshCw size={29} />
-          ) : type === "backup" ? (
-            <Database size={29} />
-          ) : type === "stop" ? (
-            <Power size={29} />
-          ) : (
-            <Gamepad2 size={29} />
-          )}
-        </div>
         {restore ? (
           <>
             <p>
@@ -2708,21 +2662,12 @@ function ConfirmModal({
               Der Spielstand wird gesichert. Erst nach abgeschlossenem Backup
               startet dasselbe Profil mit seiner bisherigen Packversion.
             </div>
-            <p className="restart-duration-note">
-              Große Modpacks können beim erneuten Laden mehrere Minuten
-              brauchen. Den Fortschritt siehst du in der Konsole.
-            </p>
-            {restartUnavailable && (
-              <p className="inline-note" role="status">
-                Das Profil läuft gerade nicht. Aktualisiere den Status, bevor du
-                einen Neustart anforderst.
-              </p>
-            )}
+            <p className="restart-duration-note">Die Konsole zeigt den Ladefortschritt.</p>
           </>
         ) : type === "stop" ? (
           <p>
-            Die Instanz wird sauber heruntergefahren. Dein Spielstand bleibt im
-            Profil erhalten und du kannst später weiterspielen.
+            <strong>{target?.name}</strong> speichert den Spielstand, fährt herunter und erstellt anschließend eine Sicherheitskopie.
+            Verbundene Spieler werden getrennt.
           </p>
         ) : type === "backup" ? (
           <p>
@@ -2731,47 +2676,40 @@ function ConfirmModal({
           </p>
         ) : (
           <>
+            {(switchSource || switching) && (
+              <fieldset className="start-mode" disabled={busy || runningJob}>
+                <legend>Startmodus</legend>
+                <label className="start-option">
+                  <input type="radio" name="start-mode" checked={!switching} onChange={() => setSourceProfileId("")} />
+                  <span><strong>Parallel starten</strong><small>Der laufende Server bleibt aktiv.</small></span>
+                </label>
+                <label className="start-option">
+                  <input type="radio" name="start-mode" checked={switching} disabled={!switchSource} onChange={() => setSourceProfileId(switchSource.id)} />
+                  <span><strong>Profilwechsel</strong><small>{source?.name || switchSource?.name} stoppen und sichern, dann das Ziel starten.</small></span>
+                </label>
+              </fieldset>
+            )}
             <p>
-              {switchProfile ? (
-                <>
-                  Die Session <strong>{active.name}</strong> wird beendet.
-                  Danach startet <strong>{target?.name}</strong> mit seinem
-                  eigenen Spielstand.
-                </>
-              ) : (
-                <>
-                  Dein Profil <strong>{target?.name}</strong> wird vorbereitet
-                  und gestartet.
-                </>
-              )}
+              <strong>{target?.name}</strong> wird {target?.installed ? "gestartet" : "installiert und gestartet"}.
+              {!switching && runningProfiles.length > 1 && " Die laufenden Server bleiben aktiv."}
             </p>
-            <div className="switch-flow">
-              {(switchProfile
-                ? [
-                    "Sauber stoppen & speichern",
-                    "Backup fertigstellen",
-                    "Neues Profil starten",
-                  ]
-                : [
-                    "Profil vorbereiten",
-                    "Installation prüfen",
-                    "Server starten",
-                  ]
-              ).map((label, index) => (
-                <div key={label}>
-                  <span>{index + 1}</span>
-                  <strong>{label}</strong>
-                  {index < 2 && <ChevronRight size={15} />}
-                </div>
-              ))}
+            <div className="inline-note start-budget">
+              <MemoryStick size={18} />
+              <span><strong>{ram(projected)} / {ram(limit)}</strong> RAM-Budget nach dem Start. GameSwitch prüft die Ports und das Budget erneut beim Start.</span>
             </div>
-            {switchProfile && (
+            {pendingBackups.includes(target?.id) && (
               <div className="inline-note">
                 <ShieldCheck size={18} />
-                Der neue Server startet erst nach erfolgreichem Backup.
+                Vor dem Start wird die ausstehende Sicherheitskopie dieses Profils abgeschlossen.
               </div>
             )}
           </>
+        )}
+        {issue && (
+          <div className="inline-note action-issue" role="status">
+            <TriangleAlert size={17} />
+            <span>{issue}</span>
+          </div>
         )}
         {sandbox && (
           <p className="confirm-sandbox">
@@ -2785,9 +2723,9 @@ function ConfirmModal({
           Abbrechen
         </button>
         <button
-          className="button primary"
+          className={`button ${type === "stop" ? "danger-outline" : "primary"}`}
           disabled={confirmDisabled}
-          onClick={onConfirm}
+          onClick={() => onConfirm(switching ? { sourceProfileId } : undefined)}
         >
           {busy ? (
             <LoaderCircle className="spin" size={16} />
@@ -2805,12 +2743,12 @@ function ConfirmModal({
               : restart
               ? "Neustart bestätigen"
               : type === "stop"
-                ? "Session beenden"
+                ? "Stoppen & sichern"
                 : type === "backup"
                   ? "Backup erstellen"
-                  : switchProfile
+                  : switching
                     ? "Sicher wechseln"
-                    : "Profil starten"}
+                    : runningProfiles.length ? "Parallel starten" : "Server starten"}
         </button>
       </div>
     </Modal>
